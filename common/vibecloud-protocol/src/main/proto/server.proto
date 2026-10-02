@@ -1,0 +1,116 @@
+syntax = "proto3";
+
+package vibecloud;
+
+import "common.proto";
+
+option java_package = "de.kevloe.vibecloud.protocol";
+option java_multiple_files = true;
+
+// Server-Befehle und -Ereignisse (PLAN.md Abschnitt 6 und 7).
+
+enum ServerPlatform {
+  SERVER_PLATFORM_UNSPECIFIED = 0;
+  SERVER_PLATFORM_PAPER = 1;
+  SERVER_PLATFORM_VELOCITY = 2;
+  SERVER_PLATFORM_MINESTOM = 3;
+}
+
+// ---------------------------------------------------------------- Master -> Wrapper
+
+message StartServer {
+  string server_name = 1;
+  string group_name = 2;
+  ServerPlatform platform = 3;
+
+  int32 port = 4;
+  int32 memory_mb = 5;
+  repeated string jvm_flags = 6;
+
+  // Statische Server behalten ihr Verzeichnis, dynamische werden nach dem Stopp geloescht.
+  bool static_server = 7;
+
+  // Kennung des Dateisatzes. Der Wrapper zieht nur, was ihm fehlt.
+  string manifest_id = 8;
+
+  // Einmal-Secret, mit dem sich das Plugin dieses Servers am Master anmeldet.
+  // Gilt nur einmal und verfaellt (PLAN.md Abschnitt 13). Genutzt ab M3.
+  string connect_secret = 9;
+
+  map<string, string> environment = 10;
+
+  // Velocity-Forwarding-Secret. Proxy und Gameserver brauchen dasselbe, sonst lehnt der
+  // Gameserver jede Verbindung ab (PLAN.md Abschnitt 13). Der Wrapper schreibt es in die
+  // passende Konfigurationsdatei der Plattform.
+  string forwarding_secret = 11;
+}
+
+message StopServer {
+  string server_name = 1;
+  // Sekunden bis zum harten Beenden.
+  int32 grace_seconds = 2;
+  string reason = 3;
+}
+
+message KillServer {
+  string server_name = 1;
+  string reason = 2;
+}
+
+// Eine Zeile in die Standardeingabe des Servers schreiben.
+message ExecuteCommand {
+  string server_name = 1;
+  string command_line = 2;
+}
+
+// ---------------------------------------------------------------- Wrapper -> Master
+
+enum ServerStateProto {
+  SERVER_STATE_UNSPECIFIED = 0;
+  SERVER_STATE_PREPARING = 1;
+  SERVER_STATE_STARTING = 2;
+  SERVER_STATE_RUNNING = 3;
+  SERVER_STATE_STOPPING = 4;
+  SERVER_STATE_STOPPED = 5;
+  SERVER_STATE_CRASHED = 6;
+}
+
+message ServerStateChanged {
+  string server_name = 1;
+  string group_name = 2;
+  ServerStateProto state = 3;
+  int32 port = 4;
+
+  // Nur bei STOPPED und CRASHED gesetzt.
+  int32 exit_code = 5;
+  string detail = 6;
+}
+
+// ---------------------------------------------------------------- Konsole
+
+message ConsoleLine {
+  string server_name = 1;
+  Timestamp at = 2;
+  string line = 3;
+  // true = kam von stderr
+  bool error_stream = 4;
+}
+
+// ---------------------------------------------------------------- Log-Upload
+
+// Gezippter Log eines beendeten DYNAMIC-Servers. Statische Server behalten ihre Logs
+// auf dem Node (PLAN.md Abschnitt 7).
+message LogChunk {
+  // Nur im ersten Chunk gesetzt.
+  string server_name = 1;
+  string group_name = 2;
+  Timestamp stopped_at = 3;
+
+  bytes data = 4;
+  bool last = 5;
+}
+
+message Ack {
+  bool accepted = 1;
+  string detail = 2;
+}

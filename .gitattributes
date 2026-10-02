@@ -1,0 +1,25 @@
+# Zeilenenden festnageln, statt sie der Git-Konfiguration des Klonenden zu ueberlassen.
+#
+# Entwickelt wird hier unter Windows (core.autocrlf steht dort meist auf true),
+# die Root-Server laufen unter Linux. Ohne diese Datei entscheidet die lokale
+# Einstellung, was in der Arbeitskopie landet - und ein gradlew mit CRLF scheitert
+# auf einem Linux-Root mit "bad interpreter: No such file or directory".
+* text=auto eol=lf
+
+# Muessen LF behalten, auch unter Windows: Sie werden auf den Roots ausgefuehrt.
+*.sh        text eol=lf
+gradlew     text eol=lf
+
+# Muss CRLF behalten: cmd.exe liest .bat zeilenweise.
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+
+# Binaer - nie anfassen, sonst ist das Archiv kaputt.
+*.jar       binary
+*.png       binary
+*.jpg       binary
+*.ico       binary
+*.woff      binary
+*.woff2     binary
+*.ttf       binary
+*.pem       binary

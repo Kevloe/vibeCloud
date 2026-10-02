@@ -1,0 +1,427 @@
+syntax = "proto3";
+
+package vibecloud;
+
+import "common.proto";
+import "server.proto";
+
+option java_package = "de.kevloe.vibecloud.protocol";
+option java_multiple_files = true;
+
+// Gameserver- und Proxy-Plugins <-> Master (PLAN.md Abschnitt 11 und 13).
+//
+// Getrennt vom NodeService, weil hier eine andere Identitaet gilt: Ein Plugin ist
+// SERVER:<name> und darf nur ueber sich selbst sprechen, nie ueber Nodes oder fremde Server.
+//
+// Anmeldung in zwei Schritten:
+//   1. RegisterServer mit dem Einmal-Secret aus vibecloud-connection.json.
+//      Das Secret gilt nur einmal und verfaellt - wer die Datei spaeter findet,
+//      kann damit nichts mehr anfangen.
+//   2. Der Master antwortet mit einem Sitzungs-Token, das fuer alle weiteren Aufrufe gilt.
+//      Ein Einmal-Secret als Dauer-Zugangsdaten waere ein Widerspruch in sich.
+service PluginService {
+
+  rpc RegisterServer(ServerRegisterRequest) returns (ServerRegisterResponse);
+
+  // Dauerkanal: Plugin meldet Ereignisse, Master schickt Befehle.
+  rpc ServerControl(stream ServerEvent) returns (stream ServerCommand);
+
+  // Login-Gate des Proxys. Der Master ruft die Pre-Event-Handler synchron auf;
+  // Bans kommen aus dem punishment-Modul, nicht aus dem Core (PLAN.md Abschnitt 10a).
+  rpc CheckLogin(LoginRequest) returns (LoginResponse);
+
+  // Sprachdateien. Der Master ist die einzige Quelle; Plugins halten eine Kopie
+  // und im Degradiert-Snapshot (PLAN.md Abschnitt 11a).
+  rpc GetMessages(MessagesRequest) returns (MessageBundle);
+
+  // Rang und Rechte eines Spielers. Das Plugin fragt beim Join und nach einer
+  // Aenderungsmeldung.
+  rpc GetPlayerData(PlayerDataRequest) returns (PlayerData);
+
+  // Sprachwahl speichern (/language).
+  rpc SetLocale(SetLocaleRequest) returns (SetLocaleResponse);
+
+  // Ein Spieler hat einen Cloud-Befehl eingegeben. Der Master prueft das Recht selbst
+  // neu und fuehrt aus; der Proxy uebertraegt nur, WER etwas wollte
+  // (PLAN.md Abschnitt 13). Nur Proxys duerfen das - ein Gameserver koennte sonst
+  // Befehle im Namen eines Administrators ausloesen.
+  rpc RunCommand(CommandRunRequest) returns (CommandRunResponse);
+
+  // Vorschlaege fuer die naechste Stelle der Eingabe. Dieselbe Quelle wie in der
+  // Konsole, damit beides nie auseinanderlaeuft.
+  rpc SuggestCommand(CommandSuggestRequest) returns (CommandSuggestResponse);
+
+  // Ein Plugin schickt einen Spieler auf einen anderen Server - etwa ein Minigame,
+  // das nach der Runde zurueck in die Lobby verteilt.
+  //
+  // Erlaubt ist das nur fuer Spieler, die auf dem aufrufenden Server sind: Sonst
+  // koennte ein Gameserver beliebige Spieler aus dem Netzwerk herumschieben. Ein
+  // Proxy darf jeden verschieben, er verwaltet sie alle.
+  rpc MovePlayer(MovePlayerRequest) returns (MovePlayerResponse);
+}
+
+// ---------------------------------------------------------------- Anmeldung
+
+message ServerRegisterRequest {
+  int32 api_version = 1;
+  string server_name = 2;
+  string group_name = 3;
+  ServerPlatform platform = 4;
+  int32 port = 5;
+  int32 max_players = 6;
+  string plugin_version = 7;
+}
+
+message ServerRegisterResponse {
+  int32 api_version = 1;
+
+  // Fuer alle weiteren Aufrufe. Das Einmal-Secret ist danach verbraucht.
+  string session_token = 2;
+
+  // Standardsprache und verfuegbare Sprachen.
+  string default_locale = 3;
+  repeated string available_locales = 4;
+
+  // Nur fuer Proxys: die aktuell bekannten Backend-Server.
+  repeated BackendServer servers = 5;
+
+  // Globaler Wartungsmodus.
+  bool maintenance = 6;
+
+  // Die Befehle, die der Proxy im Spiel anbieten soll.
+  repeated CloudCommand commands = 7;
+}
+
+// Ein Befehl, wie der Proxy ihn registriert.
+message CloudCommand {
+  string name = 1;
+  string description = 2;
+  string usage = 3;
+  // Grundrecht. Feiner geprueft wird im Master anhand des Unterbefehls - der Proxy
+  // nutzt es nur, um den Befehl vor Spielern ohne Rechte zu verbergen.
+  string permission = 4;
+
+  // Die Unterbefehle der ersten Ebene. Damit kann der Proxy den Befehl auch jemandem
+  // zeigen, der nur "vibecloud.command.server.list" hat und nicht das Grundrecht.
+  repeated string sub_commands = 5;
+}
+
+// ---------------------------------------------------------------- Plugin -> Master
+
+message ServerEvent {
+  Timestamp occurred_at = 1;
+
+  oneof event {
+    PlayerCountChanged player_count = 10;
+    PlayerJoinedNetwork player_joined = 11;
+    PlayerLeftNetwork player_left = 12;
+    PlayerSwitchedServer player_switched = 13;
+    ServerStateReport state_report = 14;
+    ModuleMessage module_message = 15;
+  }
+}
+
+message PlayerCountChanged {
+  int32 players = 1;
+}
+
+message PlayerJoinedNetwork {
+  PlayerRef player = 1;
+  // Gehasht gespeichert, nie im Klartext (PLAN.md Abschnitt 13).
+  string ip = 2;
+  string initial_server = 3;
+  string client_locale = 4;
+}
+
+message PlayerLeftNetwork {
+  PlayerRef player = 1;
+  int64 session_seconds = 2;
+}
+
+message PlayerSwitchedServer {
+  PlayerRef player = 1;
+  string from_server = 2;
+  string to_server = 3;
+}
+
+// Zustand eines Gameservers, z. B. LOBBY -> INGAME. Ab M6 fuer Minigames relevant.
+message ServerStateReport {
+  string ingame_state = 1;
+  int32 players = 2;
+}
+
+// ---------------------------------------------------------------- Master -> Plugin
+
+message ServerCommand {
+  string command_id = 1;
+
+  oneof command {
+    AddBackendServer add_server = 10;
+    RemoveBackendServer remove_server = 11;
+    KickPlayer kick_player = 12;
+    TransferPlayer transfer_player = 13;
+    ReloadMessages reload_messages = 14;
+    SetMaintenance set_maintenance = 15;
+    PlayerDataChanged player_data_changed = 16;
+    ModuleMessage module_message = 17;
+    SendMessage send_message = 18;
+    BroadcastMessage broadcast_message = 19;
+    SetCommands set_commands = 20;
+  }
+}
+
+// Die vollstaendige Befehlsliste - nicht einzelne Aenderungen. Wird ein Modul geladen
+// oder entladen, kommt die neue Liste; der Proxy ersetzt damit seine alte. Idempotent,
+// also auch nach einem verpassten Update richtig.
+message SetCommands {
+  repeated CloudCommand commands = 1;
+}
+
+message BackendServer {
+  string name = 1;
+  string group_name = 2;
+  string host = 3;
+  int32 port = 4;
+  // Einstiegsziel beim Join (PLAN.md Abschnitt 11).
+  bool fallback = 5;
+  int32 join_priority = 6;
+}
+
+message AddBackendServer {
+  BackendServer server = 1;
+}
+
+message RemoveBackendServer {
+  string name = 1;
+}
+
+message KickPlayer {
+  Uuid uuid = 1;
+  // Nachrichten-Schluessel, kein fertiger Text (PLAN.md Abschnitt 11a).
+  string message_key = 2;
+  map<string, string> placeholders = 3;
+}
+
+// Eine Nachricht an genau einen Spieler, egal auf welchem Server er gerade ist.
+// Wie ueberall nur der Schluessel: Den Text waehlt das Plugin in der Sprache des
+// Spielers (PLAN.md Abschnitt 11a).
+message SendMessage {
+  Uuid uuid = 1;
+  string message_key = 2;
+  map<string, string> placeholders = 3;
+}
+
+// Eine Nachricht an alle mit dieser Berechtigung - z. B. Strafmeldungen ans Team.
+//
+// Der Proxy fragt dafuer seine vom Master gelieferten Rechte ab; er entscheidet nicht
+// selbst, wer etwas darf (PLAN.md Abschnitt 13).
+message BroadcastMessage {
+  string permission = 1;
+  string message_key = 2;
+  map<string, string> placeholders = 3;
+}
+
+message TransferPlayer {
+  Uuid uuid = 1;
+  string target_server = 2;
+}
+
+message ReloadMessages {
+}
+
+message SetMaintenance {
+  bool global = 1;
+  string group_name = 2;
+  bool active = 3;
+}
+
+// ---------------------------------------------------------------- Login-Gate
+
+message LoginRequest {
+  Uuid uuid = 1;
+  string name = 2;
+  string ip = 3;
+  Platform platform = 4;
+  string client_locale = 5;
+}
+
+message LoginResponse {
+  bool allowed = 1;
+
+  // Nur wenn abgelehnt: Schluessel und Platzhalter fuer die Meldung.
+  string deny_message_key = 2;
+  map<string, string> placeholders = 3;
+
+  // Wohin der Spieler soll. Leer = der Proxy entscheidet selbst.
+  string target_server = 4;
+
+  // Sprache dieses Spielers (gespeicherte Wahl, sonst Client-Sprache).
+  string locale = 5;
+}
+
+// ---------------------------------------------------------------- Sprachen
+
+message MessagesRequest {
+  // Leer = alle Sprachen.
+  string locale = 1;
+}
+
+message MessageBundle {
+  string default_locale = 1;
+  // Sprache -> (Schluessel -> Text als MiniMessage)
+  map<string, MessageMap> locales = 2;
+}
+
+message MessageMap {
+  map<string, string> entries = 1;
+}
+
+// ---------------------------------------------------------------- Spielerdaten
+
+// Rang und Rechte eines Spielers.
+//
+// ABWEICHUNG VON PLAN.md Abschnitt 9: Der Plan verteilt Cache-Invalidierungen ueber
+// Redis Pub/Sub. Hier laeuft es ueber diesen bereits bestehenden, authentifizierten
+// gRPC-Stream. Grund: Ueber Redis braeuchte JEDES Plugin Redis-Zugangsdaten - und der
+// Plan legt in Abschnitt 3 ausdruecklich fest, dass Wrapper und Plugins keinen Zugang
+// zu Datenspeichern haben. Redis bleibt der Cache des Masters.
+message PlayerDataRequest {
+  Uuid uuid = 1;
+  string name = 2;
+}
+
+message PlayerData {
+  Uuid uuid = 1;
+  string name = 2;
+  Platform platform = 3;
+  // Gewaehlte Sprache; leer = noch keine Wahl getroffen.
+  string locale = 4;
+
+  RankData rank = 5;
+  // Alle Regeln, die fuer diesen Spieler gelten - Raenge und eigene zusammen.
+  repeated PermissionRule rules = 6;
+}
+
+message RankData {
+  string id = 1;
+  string name = 2;
+  string display_name = 3;
+  // MiniMessage, kein fertiger Text.
+  string prefix = 4;
+  string suffix = 5;
+  string color = 6;
+  int32 weight = 7;
+  // Leer = globale Vorgabe des Masters.
+  string chat_format = 8;
+}
+
+message PermissionRule {
+  string node = 1;
+  bool value = 2;
+  // Leer = gilt ueberall.
+  string group = 3;
+  string server = 4;
+  // 0 = laeuft nicht ab.
+  int64 expires_epoch_millis = 5;
+  // INHERITED_RANK | OWN_RANK | PLAYER - fuer /perm check.
+  string tier = 6;
+  int32 weight = 7;
+  string source = 8;
+}
+
+// Der Master teilt mit, dass sich Rang oder Rechte geaendert haben. Das Plugin holt die
+// Daten dann neu - so bleibt diese Nachricht klein und der Master die einzige Quelle.
+message PlayerDataChanged {
+  Uuid uuid = 1;
+  // true = alle Spieler neu laden (z. B. nach einer Rang-Aenderung)
+  bool all_players = 2;
+}
+
+// Sprachwahl eines Spielers speichern.
+message SetLocaleRequest {
+  Uuid uuid = 1;
+  string locale = 2;
+}
+
+message SetLocaleResponse {
+  bool accepted = 1;
+  string locale = 2;
+  repeated string available = 3;
+}
+
+// Mehrere Spielerdatensaetze - fuer den Snapshot des Proxys auf der Platte
+// (PLAN.md Abschnitt 7). Dasselbe Format wie auf der Leitung, damit es keinen
+// zweiten Serializer braucht.
+message PlayerDataList {
+  repeated PlayerData players = 1;
+}
+
+// ---------------------------------------------------------------- Modul-Kanal
+
+// Generische Nachricht zwischen dem Master-Teil eines Moduls und seinen Plugin-Bundles
+// (PLAN.md Abschnitt 10).
+//
+// Absichtlich EIN Nachrichtentyp fuer alle Module: Sonst braeuchte jedes Modul eigene
+// .proto-Dateien, Code-Generierung im Build und einen Eintrag im AuthInterceptor.
+// Nutzlast ist JSON - derselbe Serializer wie bei den Cluster-Events.
+message ModuleMessage {
+  string module_id = 1;
+  // Wird automatisch unter der Modul-Id gefuehrt, damit zwei Module sich nicht
+  // in die Quere kommen. Leer bei einer Antwort.
+  string key = 2;
+  string payload_json = 3;
+  // Ordnet Antwort zu Anfrage zu. Leer bei fire-and-forget.
+  string correlation_id = 4;
+  bool expects_response = 5;
+}
+
+// ---------------------------------------------------------------- Befehle im Spiel
+
+message CommandRunRequest {
+  Uuid uuid = 1;
+  string name = 2;
+  string command = 3;
+  repeated string args = 4;
+}
+
+message CommandRunResponse {
+  // false, wenn das Recht fehlt oder es den Befehl im Spiel nicht gibt.
+  bool allowed = 1;
+  repeated CommandLine lines = 2;
+}
+
+message CommandLine {
+  CommandLevel level = 1;
+  string text = 2;
+}
+
+enum CommandLevel {
+  COMMAND_LEVEL_INFO = 0;
+  COMMAND_LEVEL_SUCCESS = 1;
+  COMMAND_LEVEL_WARN = 2;
+  COMMAND_LEVEL_ERROR = 3;
+}
+
+message CommandSuggestRequest {
+  Uuid uuid = 1;
+  string command = 2;
+  // Die bereits getippten Argumente; das letzte ist der angefangene Text.
+  repeated string args = 3;
+}
+
+message CommandSuggestResponse {
+  repeated string candidates = 1;
+}
+
+// ---------------------------------------------------------------- Serverwechsel
+
+message MovePlayerRequest {
+  Uuid uuid = 1;
+  string target_server = 2;
+}
+
+message MovePlayerResponse {
+  bool accepted = 1;
+  // Nur wenn abgelehnt: warum. Fuer das Log des Plugins, nicht fuer Spieler.
+  string reason = 2;
+}

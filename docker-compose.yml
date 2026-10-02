@@ -1,0 +1,37 @@
+# Nur fuer die lokale Entwicklung. Im Betrieb laeuft PostgreSQL eigenstaendig,
+# Backups loest Replikation ausserhalb dieses Projekts (PLAN.md Abschnitt 17.2).
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: vibecloud-postgres
+    environment:
+      POSTGRES_DB: vibecloud
+      POSTGRES_USER: vibecloud
+      POSTGRES_PASSWORD: devonly
+      # Zeitzonen bewusst auf UTC: alle Zeitangaben werden in UTC gespeichert
+      # und erst bei der Anzeige umgerechnet (PLAN.md Abschnitt 8).
+      TZ: UTC
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vibecloud -d vibecloud"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: vibecloud-redis
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres-data:

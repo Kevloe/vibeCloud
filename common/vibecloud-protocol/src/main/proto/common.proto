@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package vibecloud;
+
+option java_package = "de.kevloe.vibecloud.protocol";
+option java_multiple_files = true;
+
+// Gemeinsame Bausteine. Feldnummern NIE wiederverwenden oder umordnen
+// (PLAN.md Abschnitt 5, Versionierung).
+
+// UUID als zwei 64-Bit-Haelften - kompakter und eindeutiger als ein String.
+message Uuid {
+  fixed64 most_significant_bits = 1;
+  fixed64 least_significant_bits = 2;
+}
+
+// Zeitpunkt in Millisekunden seit Epoch, immer UTC (PLAN.md Abschnitt 8).
+message Timestamp {
+  int64 epoch_millis = 1;
+}
+
+enum Platform {
+  PLATFORM_UNSPECIFIED = 0;
+  PLATFORM_JAVA = 1;
+  PLATFORM_BEDROCK = 2;
+}
+
+message PlayerRef {
+  Uuid uuid = 1;
+  string name = 2;
+  Platform platform = 3;
+}
+
+message ResourceUsage {
+  double cpu_load = 1;
+  int64 memory_used_mb = 2;
+  int64 memory_max_mb = 3;
+}

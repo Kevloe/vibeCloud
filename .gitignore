@@ -1,0 +1,85 @@
+# --- Gradle ---
+.gradle/
+build/
+.kotlin/
+
+# --- IDE ---
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+/out/
+
+# --- Laufzeitdaten ---
+# Master und Wrapper legen ihre Daten im Arbeitsverzeichnis an. Bei
+# "gradlew :master:vibecloud-master:run" ist das der Projektordner des Moduls,
+# bei "java -jar ..." das Verzeichnis, aus dem gestartet wurde.
+#
+# Jedes Muster hier ist mit einem fuehrenden / verankert. Ohne das trifft ein
+# Muster wie "outbox/" JEDEN gleichnamigen Ordner im Baum - und damit auch das
+# Java-Paket de.kevloe.vibecloud.api.outbox. Genau so sind FileOutbox.java,
+# Outbox.java und FileOutboxTest.java aus dem Repo gefallen, ohne dass es
+# jemandem aufgefallen waere: Der Build bricht erst beim naechsten Klon.
+/config.json
+/wrapper.json
+/tls/
+/secrets/
+/jars/
+/templates/
+/servers/
+/logs/
+/outbox/
+/cache/
+/messages/
+/run/
+
+# Dasselbe in den Projektordnern, aus denen "gradlew run" startet.
+# "*" trifft genau ein Segment - "/master/*/messages/" meint also
+# master/vibecloud-master/messages, nicht die Quelldatei unter src/main/resources.
+/master/*/config.json
+/master/*/tls/
+/master/*/secrets/
+/master/*/jars/
+/master/*/templates/
+/master/*/modules/
+/master/*/messages/
+/master/*/dashboard/
+/master/*/logs/
+/wrapper/*/wrapper.json
+/wrapper/*/servers/
+/wrapper/*/outbox/
+/wrapper/*/cache/
+/wrapper/*/logs/
+
+# --- Geheimnisse: zweites Netz, falls doch einmal woanders gestartet wird ---
+# Im Quellbaum gibt es keine Datei mit diesen Endungen, deshalb koennen sie
+# nichts Gewolltes verschlucken. Betroffen waeren sonst der private
+# TLS-Schluessel (tls/master-key.pem), der JWT-Schluessel (secrets/jwt.key) und
+# das Forwarding-Secret.
+*.pem
+*.key
+*.secret
+*.p12
+*.jks
+.env
+.env.*
+
+# --- Jars ---
+# Gebaute Jars liegen unter build/ und sind schon draussen. Das Muster faengt
+# die Kopien ab, die beim Ausprobieren danebenlanden. Der Gradle-Wrapper ist die
+# eine Ausnahme: Ohne ihn kann niemand bauen, der das Repo frisch klont.
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+
+# --- Dashboard ---
+dashboard/node_modules/
+dashboard/dist/
+
+# --- Sonstiges ---
+*.log
+*.hprof
+.attach_pid*
+.DS_Store
+Thumbs.db
+desktop.ini

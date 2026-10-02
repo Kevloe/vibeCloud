@@ -1,0 +1,53 @@
+# Standardsprache. Diese Datei ist immer vollstaendig - jeder Schluessel, der im Code
+# benutzt wird, muss hier stehen (wird per Test geprueft).
+#
+# Format: MiniMessage. Platzhalter sind benannt (<spieler>), nicht positionsbasiert -
+# bei Uebersetzungen steht die Wortreihenfolge sonst nie fest.
+#
+# Weitere Sprache: Datei daneben legen, z. B. en.yml. Kein Code noetig.
+
+prefix: "<gradient:#4a9eff:#8c52ff><bold>vibeCloud</bold></gradient> <dark_gray>|</dark_gray> "
+
+login:
+  maintenance: "<red>Das Netzwerk wird gerade gewartet.</red><newline><gray>Bitte versuch es in wenigen Minuten erneut.</gray>"
+  master_offline: "<red>Das Netzwerk wird gerade gewartet.</red><newline><gray>Bitte versuch es in wenigen Minuten erneut.</gray>"
+  no_fallback: "<red>Gerade ist kein Server verfuegbar.</red><newline><gray>Bitte versuch es in wenigen Minuten erneut.</gray>"
+  network_full: "<red>Das Netzwerk ist voll.</red><newline><gray>Aktuell <aktuell>/<maximal> Spieler.</gray>"
+
+server:
+  kicked: "<red>Du wurdest vom Server getrennt.</red><newline><gray>Grund:</gray> <grund>"
+  moved: "<gray>Du wurdest auf <white><server></white> verschoben.</gray>"
+  not_found: "<red>Der Server <white><server></white> existiert nicht.</red>"
+  connect_failed: "<red>Verbindung zu <white><server></white> fehlgeschlagen.</red>"
+  stopping: "<yellow>Dieser Server wird heruntergefahren - du wirst verschoben.</yellow>"
+
+language:
+  current: "<gray>Deine Sprache:</gray> <white><sprache></white>"
+  available: "<gray>Verfuegbar:</gray> <white><liste></white>"
+  changed: "<green>Sprache auf <white><sprache></white> geaendert.</green>"
+  unknown: "<red>Unbekannte Sprache <white><eingabe></white>.</red><newline><gray>Verfuegbar:</gray> <liste>"
+  no_permission: "<red>Dafuer fehlt dir die Berechtigung.</red>"
+
+maintenance:
+  enabled_global: "<yellow>Wartungsmodus fuer das ganze Netzwerk aktiviert.</yellow>"
+  disabled_global: "<green>Wartungsmodus aufgehoben.</green>"
+  enabled_group: "<yellow>Wartungsmodus fuer <white><gruppe></white> aktiviert.</yellow>"
+  disabled_group: "<green>Wartungsmodus fuer <white><gruppe></white> aufgehoben.</green>"
+  bypass_notice: "<gray>Das Netzwerk ist in Wartung - du kommst nur wegen deiner Berechtigung rein.</gray>"
+
+motd:
+  line1: "<gradient:#4a9eff:#8c52ff>vibeCloud Netzwerk</gradient>"
+  line2: "<gray>Willkommen zurueck!</gray>"
+  maintenance: "<red>Wartungsarbeiten</red>"
+
+# Kopf und Fuss der Tab-Liste. <online> ist die Zahl der Spieler im ganzen Netzwerk.
+tab:
+  header: "<gradient:#4a9eff:#8c52ff>vibeCloud</gradient>"
+  footer: "<gray><online> online</gray>"
+
+welcome:
+  join: "<gray>Willkommen auf dem Netzwerk, <white><spieler></white>.</gray>"
+
+error:
+  internal: "<red>Da ist etwas schiefgelaufen. Bitte melde dich beim Team.</red>"
+  no_permission: "<red>Dafuer fehlt dir die Berechtigung.</red>"

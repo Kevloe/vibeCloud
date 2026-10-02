@@ -1,0 +1,13 @@
+{
+  "id": "punishment",
+  "name": "Punishment",
+  "version": "1.0.0",
+  "main": "de.kevloe.vibecloud.punishment.PunishmentModule",
+  "apiVersion": "1.0",
+  "depends": [],
+  "softDepends": [],
+  "exports": ["de.kevloe.vibecloud.punishment.api"],
+  "bundles": {
+    "paper": "bundles/paper.jar"
+  }
+}

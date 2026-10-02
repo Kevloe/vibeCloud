@@ -1,0 +1,702 @@
+# vibeCloud
+
+Minecraft-Cloud mit Master/Wrapper-Architektur (Multi-Root). **`PLAN.md` ist die
+verbindliche Quelle** fuer Architektur und Entscheidungen — bei Widerspruch gilt PLAN.md.
+
+# Repo, Lizenz und .gitignore
+- **GPL-3.0** (`LICENSE`, Wortlaut der FSF, unveraendert). Grund: `paper-api` und
+  `velocity-api` stehen selbst unter GPL-3.0, und `platform/vibecloud-paper` und
+  `platform/vibecloud-velocity` kompilieren dagegen. Unter einer permissiven Lizenz waere
+  offen, ob die ausgelieferten Plugin-Jars damit vereinbar sind. Dieselbe Lizenz wie die
+  Abhaengigkeiten laesst die Frage gar nicht erst entstehen.
+- **Jedes Laufzeit-Muster in der `.gitignore` ist mit `/` verankert.** Ohne das trifft ein
+  Muster jeden gleichnamigen Ordner im Baum. Genau so war `outbox/` einmal gemeint als
+  Wrapper-Verzeichnis und schluckte das Java-Paket
+  `de.kevloe.vibecloud.api.outbox` - drei Quelldateien, die nie im Repo gelandet waeren.
+  Aufgefallen waere es erst beim naechsten Klon. Dieselbe Falle liegt bei `messages/`:
+  Dort stehen die `de.yml` von Master und Punishment-Modul als echte Ressourcen.
+  Neue Muster deshalb immer mit `git check-ignore -v <pfad>` gegenpruefen, in **beide**
+  Richtungen.
+- **`tls/` und `secrets/` muessen draussen bleiben** - dort liegen der private
+  TLS-Schluessel, der JWT-Schluessel und das Forwarding-Secret. `gradlew run` startet im
+  Projektordner des Moduls, also entstehen sie innerhalb des Repos.
+- **`.gitattributes` nagelt die Zeilenenden fest.** Entwickelt wird unter Windows
+  (`core.autocrlf=true`), die Roots laufen unter Linux; ein `gradlew` mit CRLF scheitert
+  dort mit "bad interpreter".
+
+# Stand
+- M0 fertig: Gradle-Geruest, Version Catalog, Convention-Plugin, docker-compose.
+- M1 fertig: node.proto, gRPC-Server mit TLS, AuthInterceptor (Token + allowed_ips + Drosselung),
+  Fingerprint-Pinning im Wrapper, Register/Heartbeat/Control-Stream mit Reconnect, FileOutbox,
+  EventCursorStore, LocalEventBus, DB-Fundament (HikariCP, Flyway, Advisory-Lock), JLine-Konsole
+  mit `node`-Befehlen. 26 Tests gruen.
+- M2 fertig: ServerRuntime + ProcessServerRuntime, inhaltsadressierter Template-Cache mit
+  Blob-Sync und Hardlinks, JarStore mit Pruefsummen-Pruefung, Servergruppen, Namensmuster,
+  PlacementScheduler, static_server_bindings, FullState-Adoption, Konsolen-Streaming mit
+  `screen`, Log-Upload. 43 Tests gruen. Ein echter Paper-26.2-Server laeuft nachweislich.
+- M3 fertig: PluginService (Einmal-Secret -> Sitzungs-Token), Velocity-Plugin (Login-Gate,
+  Backend-Registrierung, Fallback), Paper-Plugin, Minestom-Bibliothek, MessageService mit
+  de.yml, ServerConfigurator (Forwarding-Secret, Ports, online-mode), nftables-Verwaltung,
+  Geyser-Doku. 62 Tests gruen. Velocity 4.2 und Paper 26.2 laufen unter Cloud-Kontrolle,
+  beide Plugins verbunden, Proxy kennt die Backend-Server.
+- M4 fertig: Spieler- und Rang-Schema (V3), PermissionResolver mit DAG-Vererbung,
+  Negationen, Kontexten und Ablauf, PermissionService mit Caffeine-Cache und
+  Invalidierung ueber die gRPC-Streams, PlayerService mit Pre-Login-Gate,
+  `rank`/`perm`/`maintenance`-Befehle, RankDisplay (Chat/Tab/Nametags), /language,
+  Velocity-PermissionProvider. 86 Tests gruen.
+- M5 fertig: module-api (CloudModule, ModuleContext, Kanal, Commands, Datenbank, Config),
+  ModuleClassLoader mit child-first und Export-Sichtbarkeit, ModuleLoadOrder (topologisch,
+  Zyklus-Erkennung), ModuleManager mit load/unload/reload zur Laufzeit, Modul-Kanal ueber
+  die bestehenden gRPC-Streams, Bundle-Injektion in die Templates, Beispielmodul.
+  125 Tests gruen.
+- M6 fertig: module-punishment (Ban/TempBan/BanIP/Mute/TempMute/Kick/Warn, History,
+  Einspruchs-Kennung, Begruendungs-Templates), Login-Gate ueber PlayerPreLoginEvent,
+  Mute-Filter als Paper-Bundle im Modul-JAR, Modul-Kanal auf der Plugin-Seite
+  (PluginModuleChannel), SendMessage/BroadcastMessage im Protokoll, Modul-Texte
+  (messages/<sprache>.yml je Modul). 164 Tests gruen.
+- Serverwechsel: `switch`/`send`, `MovePlayer` fuer Plugins, `switchServer(...)` in allen
+  drei Plattform-Plugins, REST-Endpunkt.
+- M7 gebaut: REST-Endpunkte (Server, Gruppen, Nodes, Spieler, Raenge, Module),
+  API-Tokens (V4), Dashboard-Zugaenge (V5) mit Argon2id, Zwangswechsel des
+  Start-Passworts, JWT samt Sitzungs-Version, automatische Loeschung bei Rechte-Entzug,
+  `acp`- und `player`-Befehle, WebSocket fuer Zustaende und Server-Konsole,
+  Dashboard (Vite + React + Tailwind), von Javalin mit ausgeliefert. 239 Tests gruen.
+- Dashboard erweitert: Uebersichtsseite (Zahlen, Online-Liste, zuletzt gesehen),
+  Server-Detailseite mit Live-Log, Gruppen/Nodes/Raenge anlegen und aendern,
+  Spielersuche nach Namen, Editor fuer die Modul-Konfiguration. Dazu im Master:
+  `OnlinePlayers`, Such- und Uebersichts-Endpunkte, `AdminRoutes` zum Schreiben.
+- Sprachen im Dashboard: anlegen, uebersetzen, loeschen und neu einlesen
+  (`MessageRoutes`, Seite "Sprachen"). 250 Tests gruen.
+- Rechte im Dashboard: einzelne Regeln von Raengen und Spielern sehen, anlegen und
+  entfernen, dazu `perm check` als Formular (`PermissionRoutes`, `pages/Permissions.tsx`).
+  Knoten-Katalog aus `CommandRegistry.permissionNodes(...)` - dieselbe Liste wie die
+  Tab-Vervollstaendigung. 259 Tests gruen. Begruendungen unter "Rechte im Dashboard".
+- Gruppen und Raenge werden als ganzes Formular bearbeitet: alle aenderbaren Felder mit
+  ihrem aktuellen Wert, der Master liefert sie in `fields` mit (`valueOf` neben
+  `updateField`). 243 Tests gruen.
+- Dashboard neu gestaltet: nur noch eine Seitenleiste (Seiten oben, Zugang unten),
+  Bearbeiten in Modalen, Rueckmeldungen als Toasts, eigene Bausteine unter `src/ui/`
+  (Icon, Button, Form, Modal, Toast, Layout, Sidebar), Farben als `@theme`-Tokens,
+  Schriften im Bundle. Begruendungen unter "Oberflaeche des Dashboards".
+- Offen in M7: `/acp` ist noch nicht im Spiel getestet, und die Online-Liste ist ohne
+  Spieler nie gefuellt gesehen worden. Das Dashboard ist am Breitbild geprueft,
+  **nicht am Telefon** - die Schublade der Seitenleiste unter 1024 px hat nie jemand
+  gesehen.
+
+# NICHT verifiziert oder bewusst offen (M4)
+- **Die Rang-Anzeige im Spiel.** `RankDisplay` kompiliert und wird aufgerufen, aber ohne
+  Minecraft-Client konnte niemand Prefix, Tab-Sortierung oder Nametag wirklich sehen.
+  Geprueft ist: Der Master liefert Rang samt Prefix, die Plugins laden ihn, die
+  Invalidierung kommt an.
+- **Die Paper-Bridge greift tief in Interna.** `PermissibleInjector` tauscht per Reflection
+  das `PermissibleBase`-Feld von `CraftHumanEntity` aus. Gesucht wird ueber den **Typ**, nicht
+  den Namen, damit ein Umbenennen in Paper sie nicht bricht. Dass das Feld existiert, ist mit
+  `javap` am entpackten Server-Jar geprueft; dass final-Instanzfelder unter Java 25
+  beschreibbar sind, deckt ein Test ab. **Die Injektion in einen echten Spieler ist ohne
+  Client nicht geprueft.** Scheitert sie, laeuft der Server weiter und warnt einmal.
+- **Der Snapshot ist ein warmer Start, kein Rettungsnetz.** Mit `offline-logins=false`
+  (Standard, PLAN.md 17.4) sorgt er nur dafuer, dass Rang und Rechte nach einem
+  Proxy-Neustart sofort da sind statt erst nach der ersten Master-Antwort. Seinen
+  eigentlichen Zweck bekommt er erst mit `offline-logins=true` in
+  `plugins/vibecloud/config.properties` - dann entscheidet der Proxy bei einem
+  Master-Ausfall aus dem Snapshot. Aelter als 10 Minuten wird er verworfen.
+- **Redis wird nicht benutzt.** Begruendung siehe unten - es hat in M4 keinen Abnehmer.
+
+# NICHT verifiziert oder bewusst offen (M6)
+- **Der Chat-Filter wurde nie von einem Spieler ausgeloest.** Geprueft ist: Die Cloud
+  verteilt `bundles/paper.jar` in die Gameserver, Paper 26.2 laedt es und meldet
+  "Mute-Filter aktiv", und der Master beantwortet die Mute-Abfrage korrekt
+  (`PunishmentLoginGateTest`). Was fehlt, ist eine echte Chatnachricht - dafuer braucht
+  es einen Minecraft-Client.
+- **Das Login-Gate ist gegen eine echte Datenbank geprueft, aber nicht gegen einen echten
+  Login.** `PunishmentLoginGateTest` loest `PlayerPreLoginEvent` genauso aus wie der
+  Master beim Login; der Weg vom Proxy bis dorthin stammt aus M4 und ist unveraendert.
+- **`SendMessage` und `BroadcastMessage` sind ungetestet im Betrieb.** Velocity behandelt
+  beide, aber ohne Spieler auf dem Proxy hat nie jemand eine Meldung gesehen. Betroffen
+  sind Verwarnungen und die Strafmeldungen ans Team - nicht Bann oder Mute selbst.
+- **Es gibt nur ein Modul.** Zusammenspiel mehrerer Module (Exporte, Abhaengigkeiten,
+  Ladereihenfolge) ist nur durch Tests abgedeckt, nicht im Betrieb.
+
+# Offener Befund: Plugins nach einem Master-Neustart
+Beim Testen des Dashboards sichtbar geworden, **nicht** von M7 verursacht:
+
+Ein Gameserver, der einen Master-Neustart ueberlebt, bekommt sein Plugin nicht mehr
+verbunden. Das Einmal-Secret ist verbraucht, und `ServerSessionStore` haelt `pending`
+und `sessions` nur im Speicher - nach dem Neustart kennt der Master weder das eine noch
+das andere. Im Log des Servers steht dann endlos:
+
+```
+Keine Verbindung zum Master (UNAUTHENTICATED: Secret ungueltig, verbraucht oder abgelaufen)
+```
+
+Der Wrapper meldet den Server weiter als `RUNNING` und der Master adoptiert ihn - aber
+ohne Plugin gibt es keine Spielerzahlen, keine Rang-Daten und keine Befehle dorthin.
+Die Zusage aus M2 ("ein Master-Neustart stoppt keine Gameserver") stimmt damit nur zur
+Haelfte.
+
+**Vorschlag:** Der Wrapper hat das Secret jedes Servers noch in dessen
+`vibecloud-connection.json`. Schickt er es im `FullState` mit, kann der Master die
+Pending-Eintraege wieder anlegen, und das Plugin kommt beim naechsten Versuch herein.
+Der Weg ist sicher, weil der Node-Kanal authentifiziert und fingerprint-gepinnt ist.
+
+# NICHT verifiziert (ehrlich halten)
+- **Ein echter Spieler-Join.** Hier gibt es keinen Minecraft-Client. Geprueft ist: Proxy
+  lauscht auf 25565, Backend ist registriert, Forwarding-Secret stimmt auf beiden Seiten
+  ueberein. Der Join selbst muss mit einem Client getestet werden.
+- **Die Firewall-Verwaltung** (`NftablesFirewall`). Laeuft nur unter Linux mit nftables;
+  hier ist nur der erzeugte Regelsatz getestet, nicht seine Wirkung. Vor dem
+  Produktivbetrieb: von aussen auf einen Port 30000-30999 verbinden, muss abgelehnt werden.
+- **Geyser/Floodgate.** Siehe `docs/GEYSER.md` - reine Template-Dateien, kein Code.
+
+# Was bewusst noch fehlt
+- `allowed_ips` vergleicht nur Einzeladressen; CIDR kommt mit der Firewall-Verwaltung in M3.
+- `connect_secret` wird erzeugt und in `vibecloud-connection.json` abgelegt, aber noch von
+  niemandem gelesen - das machen die Plugins in M3.
+- Spielerzahlen sind immer 0, deshalb greifen `start_percent` und `idle_timeout` noch nicht
+  wirklich. Die Zahlen liefert der Proxy ab M3.
+- Modul-Bundles sind im Manifest vorgesehen, aber es gibt noch keine Module (M5).
+- Spielerzahlen kommen jetzt vom Proxy, aber `players`/`ranks` gibt es noch nicht (M4).
+- Das Login-Gate prueft Wartungsmodus und Fallback-Ziel. Bans haengen sich ab M6 ueber
+  `PlayerPreLoginEvent` ein - der Core kennt keine Bans.
+
+# Dashboard und Zugaenge
+- **Keine Registrierung.** Ein Zugang entsteht nur mit `acp create <spieler>` und haengt
+  an der Minecraft-UUID. Damit gelten im Dashboard **dieselben Rechte wie im Spiel** -
+  `vibecloud.command.server.stop` entscheidet an beiden Stellen. Kein zweites
+  Rechtesystem, das auseinanderlaeuft.
+- **`vibecloud.dashboard.login` ist die Eintrittskarte.** Faellt sie weg - durch
+  `rank set`, `perm remove`, geaenderte Vererbung oder einen abgelaufenen Rang -, loescht
+  der `AccountService` den Zugang. Er haengt dafuer am `PlayerPermissionsChangedEvent`,
+  das bei all diesen Ursachen ausloest. Zusaetzlich prueft der Login es noch einmal:
+  Das Event kann ausfallen, der Login nicht.
+- **Die Sitzungs-Version steht in der Datenbank, nicht im Speicher.** PLAN.md nennt dafuer
+  Redis; das waere hier falsch: Nur der Master stellt Token aus und prueft sie, und ein
+  Zaehler im Speicher waere nach einem Neustart wieder bei 1 - alte Token wuerden
+  **wieder gelten**. Die Spalte `dashboard_accounts.session_version` loest das ohne
+  zusaetzlichen Dienst.
+- **Jeder Aufruf prueft die Version mit**, nicht nur der Login. Deshalb wirkt ein
+  Rechte-Entzug oder ein Passwortwechsel binnen Sekunden statt erst beim naechsten
+  Anmelden.
+- **Solange das Start-Passwort gilt, geht nur "Passwort setzen"** - jeder andere Aufruf
+  bekommt 403. Sonst koennte jemand dauerhaft mit dem im Chat gezeigten Passwort
+  arbeiten.
+- **Passwoerter: Argon2id**, Tokens: SHA-256. Das ist kein Widerspruch - ein Passwort ist
+  erratbar, ein 32-Byte-Token aus `SecureRandom` nicht. Beides liegt in `Argon2Hash`
+  bzw. `ApiTokenService`, mit der Begruendung daneben.
+- **JWT ist selbst gebaut** (HS256, `security/Jwt`). Der Master stellt die Token aus und
+  prueft sie selbst - es gibt keinen dritten Beteiligten, mit dem ein Format abzustimmen
+  waere. Drei Felder und eine Signatur rechtfertigen keine Abhaengigkeit mit eigenem
+  Versionszyklus.
+- **WebSockets melden sich mit einer Einmal-Karte an** (`WsTickets`), nicht mit dem
+  Zugangstoken. Ein Browser kann beim WebSocket-Aufbau keine Kopfzeilen setzen; das Token
+  muesste in die Adresse und landete damit in Verlauf und Protokollen. Die Karte gilt
+  30 Sekunden und genau einmal.
+- **`/ws/events` schickt Aufnahmen, keine Einzelmeldungen** - alle zwei Sekunden und nur
+  bei Aenderung. Ein Event je Zustandswechsel haette die Kernpfade angefasst, auf denen
+  Server starten und stoppen; zwei Sekunden sind in einer Oberflaeche nicht von "sofort"
+  zu unterscheiden.
+- **Spielerzahlen zaehlen nur Proxys.** Ein Spieler ist gleichzeitig auf einem Proxy und
+  einem Gameserver - zusammengezaehlt waere er doppelt da.
+- **Javalin liefert das Dashboard selbst aus** (`master/dashboard/`). Der Pfad muss
+  `normalize()` sein: Mit einem `.` mitten im Pfad findet Jetty die Dateien nicht, jede
+  Anfrage faellt auf die `index.html` zurueck, und der Browser bekommt HTML statt
+  JavaScript - eine weisse Seite ohne Fehlermeldung.
+- **Einzelne Rechte gibt es jetzt auch im Dashboard** - aber keine zweite Auswertung:
+  Die Oberflaeche zeigt Regeln an und schickt jede Aenderung an `PermissionService`,
+  denselben Dienst, den `perm` in der Konsole ruft. Begruendungen unter "Rechte im
+  Dashboard".
+- Abweichungen von PLAN.md Abschnitt 2: **kein TanStack Query** (fuer diese Groesse
+  genuegen `fetch` und `useEffect`) und **kein shadcn/ui** (bringt eine Generator-CLI und
+  ein Dutzend Radix-Abhaengigkeiten mit, fuer sieben Seiten unverhaeltnismaessig).
+  Tailwind ist drin.
+
+# Oberflaeche des Dashboards
+- **Nur eine Seitenleiste, keine Kopfzeile.** Oben die Seiten, unten der eigene Zugang.
+  Ein Kopfbereich waere ein zweiter Ort zum Orientieren und haette die Breite gekostet,
+  die Tabellen und Logs brauchen. Den Titel bringt jede Seite selbst mit (`PageHeader`).
+- **Der aktive Punkt wird nicht nur farbig markiert**, sondern mit einem Balken links und
+  `aria-current="page"`. Farbe allein ist fuer Farbenblinde und fuer eine Sprachausgabe
+  keine Information. Dasselbe gilt fuer Serverzustaende: Punkt **und** Wort (`StateDot`).
+- **Geaendert wird in Modalen, gemeldet wird mit Toasts.** Ein Toast ist fuer etwas, das
+  man zur Kenntnis nimmt ("gespeichert"); alles, was gelesen und entschieden werden muss,
+  gehoert in ein Modal oder an das Formular. Deshalb steht ein Anmeldefehler am Formular
+  und das Node-Token in einem Dialog, der weggeklickt werden muss - ein Toast waere nach
+  vier Sekunden weg, und das Token gibt es nur einmal.
+- **Das Modal faengt den Fokus.** Beim Oeffnen springt er auf das erste Feld, Tab bleibt
+  darin, Escape schliesst, und danach steht er wieder auf dem Knopf, der es geoeffnet hat.
+  Ohne das waere die Oberflaeche mit der Tastatur unbedienbar. Geschlossen wird nur bei
+  einem Klick, der auf dem Hintergrund **beginnt** - sonst wirft ein Markieren von Text,
+  das aus dem Dialog herauszieht, die Eingaben weg.
+- **Zwei Toast-Bereiche:** Erfolg und Hinweis hoeflich (`aria-live="polite"`), Fehler
+  unterbrechend (`assertive`). Mit einem gemeinsamen Bereich muesste man sich fuer eines
+  von beidem entscheiden.
+- **Vorschlaege sind Vorschlaege.** Die Werte aus `/groups/fields` stehen als `datalist`
+  an einem freien Feld, nicht als `select`: `min_online` schlaegt 0-3 vor, aber 5 ist
+  genauso gueltig - als Auswahlliste waere das Dashboard enger als die Konsole. Nur
+  `true`/`false` ist wirklich eine Auswahl und darf ein `select` sein.
+- **Bearbeiten heisst: alle Felder auf einmal, mit dem aktuellen Wert darin** (`FieldGrid`).
+  Vorher waehlte man ein Feld aus einer Liste und tippte einen Wert ins Leere - man musste
+  wissen, was drinsteht, und jedes Feld einzeln speichern. Geaenderte Felder bekommen einen
+  Rahmen und darunter "Vorher: ...", der Fuss zaehlt auf, was gleich hinausgeht.
+- **Die Beschriftung ist der Feldname aus dem Master** (`min_online`, nicht "Minimum
+  online"), die Erklaerung steht als Hinweis darunter. Eigene Beschriftungen waeren eine
+  zweite Liste neben der des Masters - ein neues Feld hiesse im Dashboard dann gar nichts.
+  Ein fehlender Hinweis ist dagegen harmlos.
+- **Das Log scrollt in seinem Kasten, nicht die Seite.** Dafuer wird `scrollTop` direkt
+  gesetzt; `scrollIntoView` nimmt alle Eltern mit und schiebt Name und Knoepfe des Servers
+  aus dem Bild. Der Kasten braucht dazu `Card fill` - sonst ist er so hoch wie sein
+  Inhalt.
+- **Symbole sind SVG-Pfade im Bundle** (`ui/Icon.tsx`), keine Emoji und kein Icon-Paket.
+  Emoji sehen auf jedem System anders aus und werden vorgelesen; ein Paket mit eigenem
+  Versionszyklus lohnt fuer zwei Dutzend Pfade nicht. Standardmaessig `aria-hidden` -
+  ein Symbol neben Text braucht keine zweite Beschriftung.
+- **Schriften liegen im Bundle** (`@fontsource`, Fira Sans und Fira Code). Ein Panel fuer
+  eine Cloud muss im LAN ohne Internet funktionieren; eine Schrift von einem fremden
+  Server waere genau dann weg, wenn man sie braucht.
+- **Farben nur als Tokens** (`@theme` in `index.css`, Tailwind v4): `bg`, `surface`,
+  `line`, `text`, `ok`/`warn`/`bad`, `brand`. Ein roher Hex-Wert in einer Komponente ist
+  eine Farbe, die beim naechsten Mal nicht mehr passt.
+- **Wer Bewegung reduziert haben will, bekommt keine** (`prefers-reduced-motion`). Die
+  Oberflaeche bleibt vollstaendig bedienbar - es faellt nur das Ein- und Ausblenden weg.
+
+# Schreiben ueber das Dashboard
+- **`AdminRoutes` ist von `CloudRoutes` getrennt.** Lesen und Schreiben brauchen
+  verschiedene Rechte und verschiedene Sorgfalt: Ein Tippfehler beim Lesen zeigt nichts
+  an, beim Schreiben loescht er eine Gruppe.
+- **Vorgaben fuer neue Gruppen stehen in `ServerGroup.defaults`**, nicht zweimal.
+  Es gibt zwei Wege, eine Gruppe anzulegen (Konsole und REST); zwei Saetze Vorgaben waeren
+  zwei Verhaltensweisen, und der Unterschied faellt erst auf, wenn ein Server mit falschem
+  Speicher startet. Genau das ist hier einmal passiert - das Namensmuster der
+  REST-Variante war ohne `%id%` und wurde abgelehnt.
+- **Die aenderbaren Felder liefert der Master** (`/api/v1/groups/fields`,
+  `/api/v1/ranks/fields`), die Oberflaeche pflegt keine eigene Liste. Was vorgeschlagen
+  wird, muss auch gesetzt werden koennen.
+- **Die aktuellen Werte kommen in derselben Antwort mit** (`fields` an jeder Gruppe und
+  jedem Rang). Das Formular zeigt damit, was drinsteht, ohne je Datensatz nachzuladen -
+  und man ueberschreibt nichts, was man vorher nicht gesehen hat.
+- **`valueOf(...)` steht neben `updateField(...)`** (`ServerGroupRepository`,
+  `RankRepository`). Lesen und Schreiben muessen dieselbe Feldliste kennen; stuende das
+  Lesen woanders, zeigte das Formular irgendwann ein Feld, das beim Speichern abgelehnt
+  wird. `EditableFieldsTest` zieht genau das nach vorn.
+- **Gespeichert wird ein PATCH je geaendertem Feld**, auch wenn das Formular alle zeigt.
+  Die Schnittstelle prueft jeden Wert einzeln - dafuer nennt die Meldung hinterher
+  genau das Feld, das nicht ging, statt "teilweise gespeichert".
+- **Loeschen wird verweigert, solange etwas laeuft**: eine Gruppe mit aktiven Servern,
+  ein Node mit Servern darauf. Sonst liefen Server weiter, zu denen es keine Gruppe mehr
+  gibt, und der Scheduler wuesste nicht, was er mit ihnen tun soll.
+- **Eine Modul-Konfiguration wird vor dem Schreiben geparst.** Eine kaputte Datei faellt
+  sonst erst beim naechsten Start des Moduls auf - und dann startet es nicht mehr.
+  Wirksam wird sie mit `module reload <id>`; das Dashboard sagt das auch.
+- **Rechte je Aktion sind die der Befehle**: `vibecloud.command.group.edit`,
+  `vibecloud.command.node.add`, `vibecloud.command.rank.delete` und so weiter. Kein
+  eigenes Rechteschema fuer die Schnittstelle.
+- **Einzelne Rechte stehen in `PermissionRoutes`**, nicht hier: Dort geht es um Felder mit
+  je einem Wert, bei Rechten um Regeln mit Knoten, Kontext und Ablauf.
+
+# Rechte im Dashboard
+- **Keine zweite Auswertung.** `PermissionRoutes` liest ueber `PermissionService` und
+  `PermissionResolver` und schreibt ueber `addRankPermission`/`addPlayerPermission` -
+  dieselben Methoden, die `perm` in der Konsole ruft. Die Rechte-Auswertung ist die Stelle,
+  an der zwei Umsetzungen am teuersten waeren: Ein Unterschied faellt nicht als Fehler auf,
+  sondern als ein Spieler, der etwas darf.
+- **Die Rechte eines Rangs liefert der Resolver**, nicht ein zweiter Durchlauf durch die
+  Vererbung. Aufgerufen wird `PermissionResolver.resolve(rangId, ..., List.of())` - ohne
+  Spieler-Regeln, weil es um den Rang geht und nicht um eine Person. Damit stimmt die
+  Anzeige per Konstruktion mit dem ueberein, was beim Login passiert.
+- **Geerbte Regeln stehen mit dabei, aber ohne Kreuz.** Ohne sie kann niemand erklaeren,
+  warum ein Rang etwas darf, das nicht in seiner eigenen Liste steht. Loeschen laesst sich
+  dort nichts: Die Regel gehoert dem Elternrang, und ein Kreuz wuerde etwas aendern, das
+  man gerade nicht ansieht.
+- **`perm check` ist ein Formular, und es sagt warum.** Ja oder nein allein hilft nicht -
+  die entscheidende Regel und die **ueberstimmten** sind der halbe Zweck. Dort steht oft
+  der Denkfehler: ein Verbot in einem geerbten Rang, das niemand vermutet hat.
+- **Ein Knoten wird geprueft, bevor er gespeichert wird.** Eine Regel, die nie trifft,
+  faellt sonst nirgends auf: Sie steht in der Datenbank, wird bei jeder Abfrage geladen und
+  entscheidet nie etwas - im Dashboard sieht sie aus, als waere das Recht vergeben.
+  `vibecloud.*.stop` ist genau so ein Fall; ein Stern mitten im Knoten ist kein Wildcard,
+  sondern ein gewoehnliches Zeichen. Erlaubt sind deshalb nur Kleinbuchstaben, Ziffern,
+  `_`, `-` und Punkte, ein Stern allein oder als letztes Segment
+  (`PermissionInputTest`).
+- **Nur Spieler-Rechte koennen ablaufen.** Eine Rang-Regel mit Ablauf aenderte um drei Uhr
+  nachts still die Rechte aller Spieler mit diesem Rang - dafuer gibt es auch in der
+  Konsole keinen Weg, und die Schnittstelle lehnt `duration` an einer Rang-Regel ab.
+- **Erlaubt oder verboten ist eine Auswahl, kein Minus.** In einer Oberflaeche kann man ein
+  Zeichen vergessen; ein `select` nicht. Ein fuehrendes `-` versteht die Schnittstelle
+  trotzdem - so laesst sich eine Zeile aus der Konsole eins zu eins einfuegen.
+- **Der Kontext steht einzeln in der Antwort** (`group`, `server`) und nicht nur als Text
+  (`"group=lobby"`). Beim Entfernen muss er genauso wieder mitgehen, und die Oberflaeche
+  muesste ihn sonst erst zerlegen. Entfernt wird immer genau eine Regel - dieselbe kann
+  global und je Gruppe existieren.
+- **Knoten sind Vorschlaege, keine Auswahl** (`datalist`). Der Katalog kommt aus
+  `CommandRegistry.permissionNodes(...)`: die Rechte der Befehle und die von Modulen
+  angemeldeten. Ein Plugin bringt eigene mit, ohne sie anzumelden - als Auswahlliste waere
+  das Dashboard enger als die Konsole. Der Kontext dagegen **ist** eine Auswahl: ueberall,
+  eine Gruppe oder ein Server sind wirklich drei Faelle.
+- **Der Katalog steht in `CommandRegistry`**, nicht in der Konsole. Zwei Oberflaechen leben
+  davon - die Tab-Vervollstaendigung von `perm` und der Editor im Dashboard. Zwei Listen
+  waeren zwei Vorstellungen davon, welche Rechte es gibt, und die im Dashboard waere die,
+  die niemand pflegt.
+- **Rechte je Aufruf sind die Unterbefehle von `perm`**: `perm.rank`, `perm.player`,
+  `perm.check`, `perm.list`. Auch das **Lesen** der Rang-Regeln haengt an `perm.rank`,
+  obwohl es nur liest - es gibt keinen lesenden Unterbefehl dafuer, und einen hier zu
+  erfinden hiesse, einen Rechte-Knoten zu haben, den die Konsole nicht kennt.
+- **Eine Datei fuer Raenge und Spieler** (`pages/Permissions.tsx`). Es ist dieselbe Sache:
+  eine Liste von Regeln, ein Formular, ein Kreuz. Zweimal geschrieben waere der Unterschied
+  zwischen Rang und Spieler irgendwann ein Unterschied im Verhalten.
+- **Rechte sind ein eigener Dialog, nicht Teil von "Bearbeiten".** Dort geht es um Felder
+  mit je einem Wert, die beim Speichern hinausgehen; eine Regel wirkt sofort. Ein Dialog
+  mit beidem haette einen Speichern-Knopf, der fuer die eine Haelfte gilt und fuer die
+  andere nicht.
+- **Dauern versteht `Times.parseDuration`**, nicht jeder Befehl selbst. `30d` muss in
+  `/tempban`, in `perm player add` und im Dashboard dasselbe heissen - ein Unterschied
+  waere erst nach dreissig Tagen zu sehen.
+
+# Sprachen im Dashboard
+- **Bearbeitet werden die Dateien in `messages/`, nicht das geladene Bundle.** Im Bundle
+  haengen auch die Texte der Module (`punishment.ban.screen`); die stehen im JAR des
+  Moduls. Wer sie mitspeicherte, fror sie in der Datei des Betreibers ein - und ein
+  Modul-Update aenderte seine eigenen Texte nicht mehr.
+- **Nach jeder Aenderung wird neu eingelesen und verteilt**, ueber `MessageDistributor` -
+  dieselbe Stelle, die `cloud messages reload` benutzt. Zweimal geschrieben waere es
+  zweimal fast richtig, und der Unterschied faellt erst auf, wenn ein Server als einziger
+  den alten Satz zeigt.
+- **Schlaegt das Einlesen fehl, bleiben die alten Texte aktiv** - die Datei ist dann
+  geschrieben, im Spiel gilt aber noch der alte Stand. Die Antwort sagt das auch. Alles
+  andere waere ein Netzwerk voller Schluesselnamen.
+- **Eine Sprachkennung ist kein Dateiname.** Sie wird zu `messages/<kennung>.yml`, deshalb
+  die Pruefung auf `[a-z]{2,3}(_[A-Z]{2})?`: Ohne sie waere `../../config` eine gueltige
+  "Sprache". Abgedeckt von `MessageServiceTest`.
+- **Eine neue Sprache startet mit den Texten der Standardsprache**, nicht leer. Leer saehe
+  man nur Schluesselnamen und wuesste nicht, was zu uebersetzen ist; so ersetzt man Zeile
+  fuer Zeile, und bis dahin greift ohnehin Deutsch.
+- **Leere Felder werden nicht gespeichert.** Ein leerer Text waere im Spiel eine leere
+  Zeile - ein fehlender Schluessel faellt dagegen auf die Standardsprache zurueck.
+- **Ein echter Zeilenumbruch wird abgelehnt** (`<newline>` ist das Tag dafuer). In einer
+  einfach quotierten YAML-Zeile wuerde er die Datei zerreissen.
+- **Die Datei wird flach neu geschrieben** (Punkt-Schreibweise, alphabetisch) - eigene
+  Kommentare und Verschachtelung gehen dabei verloren. Die Oberflaeche sagt es vorher;
+  wer das nicht will, bearbeitet weiter von Hand und drueckt "Neu einlesen".
+- **Geschrieben wird ueber eine Datei daneben und ein Umbenennen.** Faellt der Master
+  mitten im Schreiben aus, ist die alte Datei noch heil statt halb ueberschrieben.
+- **Schluessel sind auf `[A-Za-z0-9_.-]` begrenzt.** Sie stehen unquotiert vor dem
+  Doppelpunkt; einer mit Doppelpunkt oder Raute ergaebe YAML, das sich nicht mehr lesen
+  laesst.
+- **Die Standardsprache laesst sich nicht loeschen** - ohne sie wirft `load()`, und es
+  gaebe keinen Rueckfall mehr.
+- **Recht ist `vibecloud.command.cloud.messages`** - dasselbe wie fuer
+  `cloud messages reload`. Kein eigenes Schema fuer die Oberflaeche.
+
+# Wer online ist
+- **`OnlinePlayers` haelt das nur im Speicher.** Wer verbunden ist, ist kein dauerhafter
+  Zustand: Nach einem Master-Neustart melden die Proxys ihre Spieler ohnehin neu. Eine
+  Tabelle dafuer waere eine zweite Wahrheit, die nach jedem Absturz falsch waere.
+- **Die Quelle ist immer der Proxy** - Betreten, Verlassen und jeder Serverwechsel.
+  Verliert ein Proxy die Verbindung, verschwinden seine Spieler aus der Liste: Das
+  Verlassen haette er gemeldet, und er ist gerade nicht mehr da.
+- **`lastServer` in der Datenbank ist etwas anderes.** Das ist der letzte bekannte Ort und
+  steht auch dann noch da, wenn jemand laengst offline ist.
+- **`/api/v1/players/online` muss vor `/api/v1/players/{uuid}` registriert sein** - sonst
+  faengt der Platzhalter es ab, und die Antwort ist "Keine gueltige UUID".
+
+# Serverwechsel
+- **Eine Stelle fuer alle Wege**: `PlayerTransferService`. Konsole, Befehl im Spiel,
+  Plugin ueber gRPC und REST laufen alle dort zusammen - sonst waere derselbe Ablauf
+  viermal geschrieben und dreimal halb richtig.
+- **Der Master verschiebt nicht selbst.** Er schickt `TransferPlayer` an alle Proxys;
+  derjenige, der den Spieler hat, fuehrt es aus. Nur der Proxy weiss, wer wo ist - der
+  Master kennt den letzten gemeldeten Stand, und der kann eine Sekunde alt sein.
+- **Ein Proxy ist kein Ziel.** Dorthin kann niemand geschickt werden, jeder Spieler ist
+  schon ueber ihn verbunden. Stand vorher trotzdem in der Vorschlagsliste.
+- **`switch` fuer sich selbst, `send` fuer andere** - zwei Rechte, weil es zwei Dinge sind.
+  Dafuer hat die Befehls-Schnittstelle jetzt einen `CommandActor`; wer ihn nicht braucht,
+  sieht ihn nicht (`execute(out, args)` bleibt).
+- **Ein Gameserver darf nur eigene Spieler verschieben** (`MovePlayer`). Sonst koennte ein
+  einzelner kompromittierter Server beliebige Spieler im Netzwerk herumschieben. Ein Proxy
+  darf jeden - er verwaltet sie alle.
+- **Kein Erfolg wird behauptet.** Die Antwort sagt "angenommen" und wie viele Proxys
+  erreicht wurden. Ob der Spieler online war, weiss der Master nicht.
+
+# REST-Schnittstelle
+- **Standardmaessig aus** (`http.enabled` in der config.json). Ein offener Port mit
+  Schreibzugriff auf das Netzwerk soll eine Entscheidung sein, kein Nebeneffekt.
+- **Tokens: `<id>.<geheimnis>`**, gespeichert wird nur SHA-256 des Geheimnisses. Fuer
+  Passwoerter waere das falsch, hier richtig: 32 Byte aus `SecureRandom`, da hilft kein
+  Durchprobieren. Argon2 wuerde nur jede Anfrage bremsen. Die Id steht vorn, damit die
+  Pruefung eine Zeile liest statt alle Tokens zu vergleichen.
+- **Rechte je Token** (`servers.read`, `players.write`, `*`) und 120 Anfragen pro Minute.
+  Ein unbekanntes Recht beim Anlegen wird abgelehnt - ein vertipptes waere ein Token, das
+  stillschweigend nichts darf.
+- **Kein Unterschied zwischen "kein Token" und "falsches Token"** (beides 401). Sonst
+  waere die Antwort eine Auskunft darueber, welche Ids es gibt.
+- **`api token` gibt es nur in der Konsole.** Das Token wird einmal angezeigt und gehoert
+  nicht in einen Chatverlauf.
+- **Javalin 7 nimmt Routen in der Konfiguration**, nicht fluent am Server, und braucht
+  einen JSON-Mapper. Eingesetzt ist Gson - eine zweite JSON-Bibliothek nur fuer die
+  Schnittstelle waere Ballast.
+
+# Lebenszeit der Gameserver
+- **Geht der Wrapper, gehen seine Server mit.** Er besitzt die Prozesse auf seinem Node.
+  Der Shutdown-Hook faehrt sie mit `stopGraceSeconds` (wrapper.json, Standard 30) herunter,
+  beendet Haengende hart und loescht danach die Verzeichnisse dynamischer Server. Logs
+  werden nach `logs/pending` gesichert und beim naechsten Start hochgeladen.
+- **Das ist das Gegenteil des Master-Neustarts** - und beides ist richtig. Faellt der
+  Master aus, laufen die Server weiter und werden adoptiert; faellt der Wrapper aus, ist
+  niemand mehr da, der sie steuert, und sie wuerden nur ihre Ports halten.
+- **Nach einem harten Abbruch raeumt der naechste Start auf** (`cleanupLeftovers`).
+  Erkannt wird das an `.vibecloud-node.json` im Serververzeichnis: Name, Gruppe, Port,
+  ob statisch, Prozesskennung und Prozess-Startzeit.
+- **Ohne Spurdatei wird nichts geloescht.** Ein Verzeichnis ohne Spur koennte die Welt
+  eines statischen Servers sein, und die ist nicht wiederherstellbar - dann lieber eine
+  Warnung und von Hand aufraeumen.
+- **Die Prozesskennung allein darf niemanden beenden.** Das Betriebssystem gibt sie wieder
+  aus; deshalb muss auch die Startzeit passen (Toleranz 2 s), sonst traefe das Aufraeumen
+  einen fremden Prozess.
+- **Statische Server behalten ihr Verzeichnis**, beim Abschalten wie beim Aufraeumen. Dort
+  liegt die Welt, und der Master bindet sie wieder an genau diesen Node.
+
+# Anzeige im Spiel
+- **Kopf und Fuss der Tab-Liste gehen erst ab `ServerPostConnectEvent`.** Im
+  `PostLoginEvent` steckt der Client noch im Login-Zustand und verwirft die Pakete
+  **still** - es sieht aus, als wuerde die Anzeige fehlen. Genau das war der Fehler:
+  Sie erschien erst nach einer Rang-Aenderung, weil die spaeter kommt.
+  `ServerConnectedEvent` ist ebenfalls zu frueh - es feuert, bevor der Wechsel beim
+  Client angekommen ist.
+- **Die Spielerzahl im Fuss gilt fuer alle.** Bei Join und Quit wird die Anzeige bei
+  jedem Spieler neu gesetzt, sonst steht dort die Zahl vom eigenen Join. Beim Quit eine
+  weniger - Velocity fuehrt den Gehenden da noch in der Liste.
+- **Nichts davon haengt am Rang.** Kopf und Fuss sind fuer alle gleich; die Abfrage des
+  Rangs war der Grund, warum die Anzeige bei einem Spieler ohne Rang ganz ausblieb.
+- **Fehlende Schluessel werden in `messages/de.yml` ergaenzt**, die Datei aber nie
+  ueberschrieben. Eigene Texte ueberleben ein Update, und neue Schluessel erscheinen
+  nicht als Schluesselname im Spiel. Angehaengt wird flach in Punkt-Schreibweise
+  (`tab.header: '...'`) - der Lader versteht beide Formen.
+
+# Befehle im Spiel
+- **Ein Weg, nicht zwei.** Der Proxy schickt die Zeile samt Spieler-UUID an den Master
+  (`RunCommand`), der prueft das Recht **selbst neu** und fuehrt denselben Befehl aus wie
+  in der Konsole. Im Plugin wird kein Befehl nachgebaut und nichts entschieden - das
+  `hasPermission` dort verbirgt den Befehl nur vor Spielern, die ihn nicht brauchen.
+- **Rechte gelten pro Unterbefehl**: `vibecloud.command.server.kill` ist etwas anderes als
+  `vibecloud.command.server.list`. Alles unter einem Befehl deckt
+  `vibecloud.command.server.*` ab - **nicht** `vibecloud.command.server`: "a.b" deckt
+  "a.b.c" nicht ab (`PermissionNodes`). Ohne Argumente aufgerufen zeigt ein Befehl nur
+  seine Syntax, dafuer genuegt irgendein Recht darunter.
+- **Modul-Befehle behalten ihr eigenes Recht.** `/ban` haengt an
+  `vibecloud.punishment.ban`, nicht am abgeleiteten `vibecloud.command.ban` - das setzt
+  `ModuleChannelRouter.registerCommand` ueber `permission()`.
+- **`stop`, `module`, `screen` und `help` gibt es im Spiel nicht** (`availableInGame()`).
+  Die ersten drei sind zu heikel oder technisch unmoeglich, `help` wuerde das `/help` des
+  Gameservers verdecken. Im Spiel listet `/cloudhelp` am Proxy, was der Spieler darf.
+- **Unbekannter Befehl und fehlendes Recht sehen gleich aus.** Sonst waere die
+  Fehlermeldung eine Auskunft darueber, welche Befehle es gibt.
+- **Nur ein Proxy darf Befehle melden.** Ein Gameserver koennte sonst Befehle mit der UUID
+  eines Administrators ausloesen - geprueft wird gegen die Plattform aus der
+  Server-Registry, nicht gegen die Angabe im Aufruf.
+- **Vorschlaege kommen vom Master** (`SuggestCommand`) und sind nach Rechten gefiltert -
+  wer `server kill` nicht darf, bekommt es beim Tippen nicht angeboten. Es ist dieselbe
+  `complete()`-Methode wie in der Konsole, damit beides nie auseinanderlaeuft.
+- **Die Argumentliste endet immer mit dem angefangenen Text** (bei einem Leerzeichen am
+  Ende ein leerer Eintrag). Deshalb nutzt das Velocity-Plugin `RawCommand` und nicht
+  `SimpleCommand`: Nur dort ist das Leerzeichen am Ende sichtbar.
+- **Die Befehlsliste wird vollstaendig verteilt**, nicht als Aenderung (`SetCommands`).
+  Nach `module load`/`unload` schickt der Master die neue Liste; der Proxy ersetzt damit
+  seine alte. Eine verpasste Meldung heilt so von selbst.
+
+# Wichtige Regeln fuer die Konsole
+- **Log-Meldungen gehen durch den LineReader**, nicht nach `System.out`. Dafuer gibt es
+  `TerminalAppender` in `logback.xml`. Ein gewoehnlicher `ConsoleAppender` ueberschreibt
+  die Eingabezeile: Prompt und halb getippter Befehl sind nach jeder Meldung weg.
+  Das ist die einzige Stelle, die Logback direkt kennt - sonst nur SLF4J.
+- **Das Terminal wird als System-Terminal geoeffnet**, mit Rueckfall auf ein einfaches.
+  Nur ein System-Terminal kann den Cursor bewegen; ohne das gibt es weder ein neu
+  gezeichnetes Prompt noch Tab-Vervollstaendigung. Ohne Konsole (Dienst, umgeleitete
+  Eingabe) greift der Rueckfall.
+- **Log-Format ist `<Datum Zeit> <LEVEL> - <Meldung>`**, ohne Logger-Namen.
+  `d.k.v.m.g.NodeServiceImpl` sagt einem Betreiber nichts.
+- **Zeitangaben fuer die Anzeige laufen ueber `Times`** (`common`). `Instant.toString()`
+  ist UTC und liegt in Deutschland im Sommer zwei Stunden hinter der Wanduhr - das sieht
+  aus wie ein Fehler. Gespeichert wird weiter UTC.
+- **Ein unbekannter Befehl schlaegt passende vor** (`CommandRegistry.completeNames`:
+  erst Praefix, dann Teiltreffer). Der einzige Treffer wird aber **nicht** einfach
+  ausgefuehrt - unter den Befehlen stehen `ban` und `stop`.
+- **`MessageBundle.raw(null, ...)` ist erlaubt** und bedeutet "keine Sprache bekannt",
+  etwa bei der MOTD. Vorher warf die unveraenderliche Map dabei, und der Proxy
+  beantwortete keinen einzigen Server-List-Ping mehr.
+
+# Wichtige Regeln aus M6
+- **Der Core kennt keine Bans.** Das Modul haengt einen Handler an `PlayerPreLoginEvent`
+  und bricht ab. Wer Whitelist oder Laendersperre will, macht es genauso - ohne eine
+  Zeile im Core.
+- **Bei einem Datenbankfehler wird der Login abgelehnt, der Chat aber durchgelassen.**
+  Ein Ausfall darf kein Weg sein, einen Bann zu umgehen; ein stummer Chat waere dagegen
+  eine Strafe fuer alle. Die Richtung ist pro Fall bewusst gewaehlt, nicht einheitlich.
+- **`ban` speichert keine IP, nur `banip` tut das.** Sonst traefe jeder Bann die
+  Mitbewohner des Gebannten mit. `enforceIpBans` in der Modul-Config steuert nur, ob
+  beim Login ueberhaupt gegen IPs geprueft wird.
+- **Strafen werden nie geloescht, nur als aufgehoben markiert** (`revoked_at`). Die
+  Historie muss vollstaendig bleiben, auch nach einem Entbannen.
+- **Einspruchs-Kennungen enthalten kein 0, O, 1, I oder L.** Ein Spieler tippt sie vom
+  Ban-Bildschirm ab.
+- **Der Modul-Klassenlader ist auch bei Ressourcen child-first.** `URLClassLoader` fragt
+  sonst den Parent zuerst - und ein Modul bekaeme `messages/de.yml` des Masters statt
+  seiner eigenen Datei. Das faellt nirgends als Fehler auf; im Spiel stuende statt des
+  Ban-Textes nur der Schluessel. Abgedeckt von `ModuleClassLoaderTest`.
+- **Spielersichtbare Texte schickt der Master als Schluessel**, auch aus einem Modul:
+  `kick`, `message` und `broadcast` in `ModulePlayers` nehmen nur Schluessel und
+  Platzhalter. Den Satz baut das Plugin in der Sprache des Spielers.
+- Ein Bundle (`bundles/paper.jar`) braucht das Cloud-Plugin auf dem Server. Es gehoert
+  nach `templates/global/server/plugins/` - die Cloud verteilt nur Modul-Bundles, nicht
+  sich selbst.
+
+# Wichtige Regeln aus M5
+- **Modul-Migrations liegen unter `db/migration/<modul-id>/`**, nicht direkt unter
+  `db/migration`. Der ClassLoader eines Moduls sieht auch die Ressourcen des Masters -
+  Flyway faende sonst zwei Dateien mit Version 1 und bricht ab.
+- **`baselineVersion("0")` ist Pflicht** bei Modul-Migrations. Mit dem Standardwert 1
+  baselint Flyway auf Version 1 und ueberspringt die V1 des Moduls - die Tabellen
+  entstehen nie, und es sieht aus wie ein Erfolg.
+- **Module nutzen `compileOnly(project(":modules:module-api"))`**, nie `implementation`.
+  Mitgepackt haette das Modul eigene Kopien von `CloudModule` und `EventBus`, und der
+  Master koennte es nicht als `CloudModule` ansprechen - ein ClassCastException mit
+  identischen Klassennamen.
+- **Ein Modul sieht nur `vibecloud-api`, `common`, `protocol` und `module-api`.**
+  `de.kevloe.vibecloud.master` fehlt absichtlich in den geteilten Paketen.
+- **Eigene Events brauchen einen `exports`-Eintrag** in `module.json`, sonst versteckt die
+  Isolation sie vor anderen Modulen.
+- Ein Zyklus zwischen Modulen laedt **kein** Modul - halb geladene Module wuerden den
+  Fehler verschleiern.
+
+# Wichtige Regeln aus M4
+- **Ein Spieler hat genau einen Rang** (`players.rank_id`). Rechte-Sets kombiniert man ueber
+  Vererbung (`rank inherit`), nicht ueber mehrere Raenge.
+- **Vorrang der Regeln** (erster Unterschied entscheidet): Knoten-Genauigkeit, dann
+  Kontext-Genauigkeit, dann Ebene (Spieler > eigener Rang > geerbte nach weight), dann
+  gewinnt das Verbot. Das ist eine **Praezisierung** gegenueber PLAN.md Abschnitt 9, wo
+  "Negationen gewinnen immer" und "Spieler schlaegt Rang immer" sich widersprechen.
+  Dokumentiert in `ResolvedPermissions`.
+- **Zyklen werden beim Anlegen abgelehnt**, nicht zur Laufzeit entdeckt.
+- **Invalidierung laeuft ueber die gRPC-Streams, nicht ueber Redis.** Ueber Redis braeuchte
+  jedes Plugin Redis-Zugangsdaten, und Abschnitt 3 legt fest, dass Plugins keinen Zugang zu
+  Datenspeichern haben. Redis bleibt damit vorerst ohne Abnehmer - es wird interessant bei
+  einem zweiten Master (M8) oder gemeinsamem Modul-Zustand (M5/M6).
+- **Unbekannter Spieler = keine Rechte.** Ein Ausfall darf nie Rechte erweitern.
+- Abgelaufene Raenge fallen auf `rank_fallback_id`, sonst auf den Default - geprueft
+  minuetlich UND beim Login.
+
+# Wichtige Regeln aus M3
+- **Plugin-Jars muessen protobuf und guava verlagern** (`relocate`). Paper liefert
+  protobuf-java 4.29.0 mit und gewinnt auf dem Klassenpfad; generierter Code von 4.36.2
+  wird dann abgelehnt. Ohne Relocation scheitert das Plugin im Static-Initializer.
+- **Proxys lauschen auf 25565**, Gameserver auf 30000-30999. Niemals vermischen: Der
+  interne Bereich ist per Firewall auf die Proxy-IPs begrenzt und fuer Spieler unerreichbar.
+- **Pro Node hoechstens ein Proxy** - Port 25565 kann nur einmal belegt werden.
+- **Backend-Adresse ist die IP des Nodes, nie sein Name.** `node-a` ist nicht auflösbar.
+  Der Master nimmt `serverAddress` aus der wrapper.json, sonst die Quell-IP der Verbindung.
+- **`velocity.toml` braucht einen leeren `[forced-hosts]`-Abschnitt.** Fehlt er, nimmt
+  Velocity seine Beispiel-Hosts, findet die Server nicht und startet nicht.
+- Das Einmal-Secret gilt nur fuer `RegisterServer`; danach gilt das Sitzungs-Token.
+
+# Wichtige Regeln aus M2
+- **`mc_version: latest` heisst "neueste Version mit STABILEN Builds"**, nicht die neueste
+  ueberhaupt. Sonst laeuft das Netzwerk unbemerkt auf einer Beta (26.3 ist aktuell Beta).
+- **Statische Server weichen nie auf einen anderen Node aus.** Faellt ihr Node aus, bleiben
+  sie aus (`WAITING_FOR_NODE`) - auf einem anderen Node kaemen sie mit leerer Welt hoch.
+- **Ein Master-Neustart stoppt keine Gameserver.** Der Wrapper meldet beim Reconnect seinen
+  `FullState` und der Master adoptiert sie. **Ein Wrapper-Neustart stoppt sie dagegen
+  schon** - siehe unten, der Wrapper besitzt die Prozesse auf seinem Node.
+- Gruppen-Aenderungen wirken erst auf **neu gestartete** Server.
+- Logs beendeter DYNAMIC-Server gehen zum Master, statische behalten sie auf dem Node.
+
+# Nach jeder Aenderung (verbindlich)
+**Jede** Aenderung am Code wird gebaut und sofort in die Testumgebung uebertragen - nicht
+erst am Ende eines Meilensteins:
+
+```
+./gradlew updateTestEnv
+```
+
+Das baut alles inklusive Tests und kopiert danach die fuenf Dateien, die die Testumgebung
+braucht:
+
+| Datei | Ziel in der Testumgebung |
+|---|---|
+| `CloudMaster.jar` | `master/` |
+| `CloudWrapper.jar` | `wrapper/` |
+| `module-punishment.jar` | `master/modules/` |
+| `vibecloud-paper.jar` | `master/templates/global/server/plugins/` |
+| `vibecloud-velocity.jar` | `master/templates/global/proxy/plugins/` |
+| `dashboard/dist/` | `master/dashboard/` (nur wenn gebaut) |
+
+- **Schlaegt ein Test fehl, wird nichts kopiert.** Der Task haengt am vollstaendigen Build,
+  damit in der Testumgebung nie ein Jar landet, das an einem roten Test vorbeigekommen ist.
+- **Der Pfad steht in `gradle.properties`** (`vibecloud.testEnv`, standardmaessig
+  `../vibeCloud-Test`). Fehlt der Ordner, meldet der Task das und tut nichts - der Build
+  bleibt gruen.
+- **Laufende Prozesse merken die neuen Jars nicht.** Master, Wrapper und Gameserver laden
+  ihre Klassen beim Start; nach einem Update muessen sie neu gestartet werden. Dateien, die
+  sich nicht ersetzen liessen, nennt der Task namentlich.
+- Die Testumgebung selbst (`START-HIER.md`, Startskripte, Node-Token, Zertifikat,
+  Templates) wird **nicht** ueberschrieben - nur die Jars.
+- **Das Dashboard baut npm, nicht Gradle** (PLAN.md Abschnitt 4): `cd dashboard &&
+  npm run build`. `updateTestEnv` kopiert danach nur noch `dist/` mit.
+
+# Build
+- `./gradlew updateTestEnv` — der normale Weg: baut alles und aktualisiert die
+  Testumgebung (siehe oben)
+- `./gradlew build` — alles inkl. Fat-Jars (`CloudMaster.jar`, `CloudWrapper.jar`),
+  ohne die Testumgebung anzufassen
+- `./gradlew :master:vibecloud-master:shadowJar` — nur ein Modul
+- `./gradlew test`
+- `docker compose up -d` — PostgreSQL + Redis fuer die Entwicklung
+- Java-Version zentral in `gradle.properties` (`vibecloud.javaVersion`), Toolchain laedt das JDK nach
+- Alle Bibliotheksversionen in `gradle/libs.versions.toml` — nie direkt im Build-Skript
+
+# Starten
+Die Jars sind fuer Java 25 kompiliert. Ohne lokal installiertes JDK 25 laufen sie nicht mit
+`java -jar`, obwohl der Build gruen ist — Gradle nutzt die eigene Toolchain, die Kommandozeile
+nicht. Zwei Wege:
+- `./gradlew :master:vibecloud-master:run` / `:wrapper:vibecloud-wrapper:run` — nutzt die Toolchain
+- `java -jar master/vibecloud-master/build/libs/CloudMaster.jar` — braucht Java 25 auf dem PATH
+
+**Auf den Roots muss Java 25 installiert sein**, nicht nur die JRE fuer die Gameserver.
+Beim Start immer `--enable-native-access=ALL-UNNAMED` mitgeben, sonst warnt Java 25 wegen der
+nativen Netty-Bibliotheken bei jedem Start (die Start-Skripte und die systemd-Unit tun das schon).
+
+# Erste Inbetriebnahme
+1. `docker compose up -d`
+2. Master starten -> legt `config.json` an und beendet sich. Werte pruefen.
+3. Master erneut starten -> migriert die DB, erzeugt `tls/master-cert.pem` und zeigt den
+   Zertifikat-Fingerprint.
+4. In der Konsole `node add <name> [maxMemoryMb] [ip,ip]` -> gibt eine fertige `wrapper.json`
+   samt Token und Fingerprint aus. **Das Token wird nur einmal angezeigt.**
+5. Diese `wrapper.json` auf den Root legen, Wrapper starten. `node list` zeigt ihn online.
+
+# Abhaengigkeitsrichtung (strikt)
+`protocol` + `common` -> `api` -> {`master`, `wrapper`, `platform/*`, `module-api`} -> `modules/*`
+
+Ein Modul sieht **nur** `module-api` und `vibecloud-api`, niemals Master-Interna.
+
+# API-Trennung (KRITISCH - nicht vermischen)
+- `platform/vibecloud-velocity`: nur Velocity-API (4.x), `@Plugin`, `@Subscribe`, Adventure
+- `platform/vibecloud-paper`: nur Paper-API, `JavaPlugin`, `plugin.yml`
+- `platform/vibecloud-minestom`: nur Minestom, eigener `main()`, KEIN Bukkit, KEIN `plugin.yml`
+- Plattform-Abhaengigkeiten immer `compileOnly` — der Server bringt sie selbst mit
+
+# Minecraft-Versionen
+Minecraft nutzt ein neues Schema: nach `1.21.11` kam `26.1` -> `26.2` -> `26.3`.
+**`26.2` ist die aktuelle stabile Reihe**, `26.3` bisher nur Beta. Die Version gehoert zur
+Servergruppe (`mc_version`), nicht in den Core.
+
+# Stil
+- Java 25: Records, sealed interfaces, Pattern-Matching-switch, Virtual Threads
+- Logging ueber SLF4J. **Nie** `System.out`, `printStackTrace()` oder `§`-Farbcodes
+- Spielersichtbare Texte **immer** als Nachrichten-Schluessel, nie als String im Code
+- Zeitangaben in UTC (`timestamptz`), Umrechnung erst bei der Anzeige
+- Keine Credentials im Code — `config.json` / `wrapper.json` sind in `.gitignore`
+
+# Sicherheit (nicht aufweichen)
+- Der Master prueft **jede** Berechtigung selbst neu. Plugins uebertragen nur, *wer* etwas
+  angefordert hat — niemals ein "darf das"-Flag
+- Jede eingehende Nachricht wird gegen die Verbindungsidentitaet geprueft
+  (`NODE:<name>` / `SERVER:<id>`): ein Node darf nur ueber seine eigenen Server sprechen
+- Nur der Master greift auf die Datenbank zu. Wrapper und Plugins nie

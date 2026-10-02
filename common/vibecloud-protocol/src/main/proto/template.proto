@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package vibecloud;
+
+option java_package = "de.kevloe.vibecloud.protocol";
+option java_multiple_files = true;
+
+// Verteilung der Server-Dateien (PLAN.md Abschnitt 6, "Templates und Server-Jars").
+//
+// Der Master setzt die Dateiliste zusammen: global/* zuerst, dann das Gruppen-Template
+// (darf ueberschreiben), dann die Modul-Bundles, dazu server.jar aus dem Jar-Store.
+// Der Wrapper bekommt eine fertige Liste und muss die Schichtung nicht kennen.
+//
+// Inhaltsadressiert: Der Wrapper legt Dateien unter ihrem SHA-256 ab und zieht nur,
+// was ihm fehlt. Zwei Gruppen mit derselben Plugin-Version uebertragen sie also einmal.
+
+message TemplateManifest {
+  // Vom Master vergeben, wechselt bei jeder inhaltlichen Aenderung.
+  string manifest_id = 1;
+  string group_name = 2;
+  repeated ManifestEntry entries = 3;
+}
+
+message ManifestEntry {
+  // Zielpfad im Server-Verzeichnis, relativ und mit '/' getrennt, z. B. "plugins/foo.jar".
+  string path = 1;
+  string sha256 = 2;
+  int64 size = 3;
+  // Unter Linux auf server.jar nicht noetig, aber Start-Skripte brauchen es.
+  bool executable = 4;
+}
+
+message ManifestRequest {
+  string manifest_id = 1;
+}
+
+// Welche Blobs der Wrapper noch braucht.
+message BlobRequest {
+  repeated string sha256 = 1;
+}
+
+message BlobChunk {
+  string sha256 = 1;
+  bytes data = 2;
+  // true beim letzten Chunk dieses Blobs
+  bool last = 3;
+}

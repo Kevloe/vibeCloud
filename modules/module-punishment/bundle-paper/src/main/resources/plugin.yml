@@ -1,0 +1,8 @@
+name: vibeCloud-Punishment
+version: 1.0.0
+main: de.kevloe.vibecloud.punishment.paper.PunishmentPaperPlugin
+api-version: "26.2"
+author: kevloe
+description: Mute-Filter im Chat - fragt den Master, haelt selbst keine Strafen
+# Ohne das Cloud-Plugin gibt es keinen Kanal zum Master, also auch nichts zu filtern.
+depend: [vibeCloud]

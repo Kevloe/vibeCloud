@@ -1,0 +1,11 @@
+{
+  "id": "example",
+  "name": "Beispielmodul",
+  "version": "1.0.0",
+  "main": "de.kevloe.vibecloud.example.ExampleModule",
+  "apiVersion": "1.0",
+  "depends": [],
+  "softDepends": [],
+  "exports": ["de.kevloe.vibecloud.example.api"],
+  "bundles": {}
+}

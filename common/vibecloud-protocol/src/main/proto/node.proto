@@ -1,0 +1,156 @@
+syntax = "proto3";
+
+package vibecloud;
+
+import "common.proto";
+import "server.proto";
+import "template.proto";
+
+option java_package = "de.kevloe.vibecloud.protocol";
+option java_multiple_files = true;
+
+// Master <-> Wrapper (PLAN.md Abschnitt 5).
+//
+// WICHTIG: Immer der Wrapper waehlt den Master an, nie umgekehrt. Der Master schickt
+// Befehle ueber den Rueckkanal von Control(). Dadurch braucht kein Root einen offenen Port.
+//
+// Feldnummern NIE wiederverwenden oder umordnen. Luecken sind absichtlich und fuer
+// spaetere Phasen reserviert - sie zu fuellen ist in Ordnung, sie zu verschieben nicht.
+service NodeService {
+
+  // Anmeldung. Token und Node-Name stehen in den gRPC-Metadaten, nicht in der Nachricht,
+  // damit der AuthInterceptor sie pruefen kann, ohne den Rumpf zu kennen.
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+
+  // Der Dauerkanal: Wrapper sendet Ereignisse, Master antwortet mit Befehlen.
+  rpc Control(stream NodeEvent) returns (stream NodeCommand);
+
+  // Dateisatz einer Gruppe abfragen und fehlende Blobs ziehen.
+  rpc GetManifest(ManifestRequest) returns (TemplateManifest);
+  rpc PullBlobs(BlobRequest) returns (stream BlobChunk);
+
+  // Live-Konsole eines laufenden Servers. Eigener Stream, damit viel Log-Verkehr
+  // den Control-Kanal nicht verstopft.
+  rpc PushConsole(stream ConsoleLine) returns (Ack);
+
+  // Log eines beendeten DYNAMIC-Servers, gzip-komprimiert.
+  rpc UploadServerLog(stream LogChunk) returns (Ack);
+}
+
+// ---------------------------------------------------------------- Anmeldung
+
+message RegisterRequest {
+  // Protokoll-Version des Wrappers. Der Master akzeptiert die aktuelle und die
+  // vorherige Version -> Update-Reihenfolge: erst Master, dann Wrapper.
+  int32 api_version = 1;
+
+  // Nur zur Anzeige; die verbindliche Identitaet kommt aus den Metadaten.
+  string wrapper_version = 2;
+
+  // Was dieser Node zu bieten hat.
+  int64 max_memory_mb = 3;
+  int32 cpu_cores = 4;
+  string os_name = 5;
+
+  // Uhrzeit des Wrappers in UTC. Der Master berechnet daraus die Abweichung und
+  // korrigiert nachgespielte Outbox-Ereignisse (PLAN.md Abschnitt 7).
+  Timestamp wrapper_time = 6;
+
+  // Adresse, unter der die Gameserver dieses Nodes fuer Proxys erreichbar sind.
+  // Leer = der Master nimmt die Quell-IP der Verbindung. Wichtig bei NAT oder wenn der
+  // Node intern anders erreichbar ist als von aussen.
+  string server_address = 8;
+
+  // Hoechste seq, die dieser Wrapper je vergeben hat. Der Master antwortet mit dem
+  // Stand, den er kennt, damit der Wrapper weiss, ab wo er nachspielen muss.
+  uint64 highest_outbox_seq = 7;
+}
+
+message RegisterResponse {
+  int32 api_version = 1;
+
+  // Ab dieser seq (exklusiv) soll der Wrapper seine Outbox nachspielen.
+  uint64 replay_from_seq = 2;
+
+  // Abweichung der Wrapper-Uhr gegenueber dem Master in Millisekunden.
+  int64 clock_skew_millis = 3;
+
+  // Heartbeat-Intervall, das der Master erwartet.
+  int32 heartbeat_interval_seconds = 4;
+}
+
+// ---------------------------------------------------------------- Wrapper -> Master
+
+message NodeEvent {
+  // Fortlaufend pro Wrapper, liegt mit der Outbox auf der Platte und ueberlebt
+  // Neustarts. Der Master dedupliziert darueber (Tabelle event_cursors).
+  // 0 bedeutet: nicht dedupliziert (z. B. Heartbeat).
+  uint64 seq = 1;
+
+  // Wann es tatsaechlich passiert ist - nicht wann es ankam.
+  Timestamp occurred_at = 2;
+
+  oneof event {
+    Heartbeat heartbeat = 10;
+    FullState full_state = 11;
+    ResourceReport resource_report = 12;
+    ReplayFinished replay_finished = 13;
+    ServerStateChanged server_state_changed = 20;
+  }
+}
+
+message Heartbeat {
+}
+
+// Nach dem Reconnect: "das laeuft bei mir gerade". Der Master adoptiert diese Server,
+// statt sie neu zu starten (PLAN.md Abschnitt 7).
+message FullState {
+  repeated RunningServer servers = 1;
+}
+
+message RunningServer {
+  string server_name = 1;
+  string group_name = 2;
+  int32 port = 3;
+  string state = 4;
+  Timestamp started_at = 5;
+}
+
+message ResourceReport {
+  ResourceUsage host = 1;
+}
+
+// Ende des Replays. Erst danach macht der Master seinen Scheduler wieder scharf.
+message ReplayFinished {
+  uint64 last_seq = 1;
+}
+
+// ---------------------------------------------------------------- Master -> Wrapper
+
+message NodeCommand {
+  // Vom Master vergeben, damit der Wrapper Antworten zuordnen kann.
+  string command_id = 1;
+
+  oneof command {
+    AckEvents ack_events = 10;
+    Shutdown shutdown = 11;
+    StartServer start_server = 20;
+    StopServer stop_server = 21;
+    KillServer kill_server = 22;
+    ExecuteCommand execute_command = 23;
+    // 30-39 reserviert fuer Firewall-/Proxy-IP-Verteilung (M3)
+  }
+}
+
+// Bestaetigt, bis zu welcher seq der Master die Outbox verarbeitet hat.
+// Erst danach darf der Wrapper die Eintraege verwerfen.
+message AckEvents {
+  uint64 up_to_seq = 1;
+}
+
+message Shutdown {
+  // true = Gameserver mit herunterfahren, false = nur der Wrapper beendet sich
+  // und die Server laufen weiter.
+  bool stop_servers = 1;
+  string reason = 2;
+}

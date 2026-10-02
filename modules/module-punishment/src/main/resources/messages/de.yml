@@ -1,0 +1,33 @@
+# Texte des Punishment-Moduls.
+#
+# Die Schluessel bekommen beim Einhaengen die Modul-Id als Praefix:
+# aus "ban.screen" wird "punishment.ban.screen". So kann ein Modul keine
+# Core-Texte ueberschreiben (PLAN.md Abschnitt 11a).
+
+ban:
+  screen: "<red><bold>Du bist gebannt.</bold></red><newline><newline><gray>Grund:</gray> <white><grund></white><newline><gray>Laeuft ab:</gray> <white><ablauf></white><newline><newline><gray>Einspruch mit der Kennung</gray> <yellow><kennung></yellow>"
+  announced: "<red><spieler> wurde gebannt.</red> <gray>Grund: <grund></gray>"
+  already: "<red><spieler> ist bereits gebannt.</red>"
+  lifted: "<green>Der Bann von <spieler> wurde aufgehoben.</green>"
+  not_banned: "<red><spieler> ist nicht gebannt.</red>"
+
+mute:
+  blocked: "<red>Du bist stummgeschaltet und kannst nicht schreiben.</red><newline><gray>Grund:</gray> <white><grund></white><newline><gray>Laeuft ab:</gray> <white><ablauf></white>"
+  announced: "<yellow><spieler> wurde stummgeschaltet.</yellow> <gray>Grund: <grund></gray>"
+  already: "<red><spieler> ist bereits stummgeschaltet.</red>"
+  lifted: "<green>Die Stummschaltung von <spieler> wurde aufgehoben.</green>"
+  not_muted: "<red><spieler> ist nicht stummgeschaltet.</red>"
+
+kick:
+  screen: "<red>Du wurdest vom Netzwerk getrennt.</red><newline><newline><gray>Grund:</gray> <white><grund></white>"
+  announced: "<yellow><spieler> wurde gekickt.</yellow> <gray>Grund: <grund></gray>"
+
+warn:
+  received: "<yellow><bold>Verwarnung</bold></yellow><newline><gray>Grund:</gray> <white><grund></white>"
+  announced: "<yellow><spieler> wurde verwarnt.</yellow> <gray>Grund: <grund></gray>"
+
+common:
+  permanent: "nie"
+  unknown_player: "<red>Unbekannter Spieler: <spieler></red>"
+  no_permission: "<red>Dafuer fehlt dir die Berechtigung.</red>"
+  invalid_duration: "<red>Dauer nicht verstanden: <eingabe></red> <gray>(erlaubt: 30d, 12h, 90m)</gray>"

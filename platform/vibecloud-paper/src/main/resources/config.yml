@@ -1,0 +1,6 @@
+# vibeCloud - Gameserver-Plugin
+#
+# Chat-Format aus dem Rang rendern. Abschalten, wenn auf diesem Server ein eigenes
+# Chat-Plugin arbeitet - sonst setzen beide ein Format und es sieht doppelt aus
+# (PLAN.md Abschnitt 11).
+chat-format: true

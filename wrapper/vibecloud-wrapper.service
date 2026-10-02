@@ -1,0 +1,28 @@
+# Vorlage fuer die Roots (PLAN.md Abschnitt 16.7).
+# Kopieren nach /etc/systemd/system/, dann:
+#   systemctl daemon-reload && systemctl enable --now vibecloud-wrapper
+[Unit]
+Description=vibeCloud Wrapper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vibecloud
+Group=vibecloud
+WorkingDirectory=/opt/vibecloud
+ExecStart=/usr/bin/java -Xmx256m --enable-native-access=ALL-UNNAMED -jar /opt/vibecloud/CloudWrapper.jar
+Restart=always
+RestartSec=5
+
+# Der Wrapper pflegt das nftables-Set mit den Proxy-IPs (PLAN.md Abschnitt 13).
+# Ohne firewall.manage=true in der wrapper.json kann diese Zeile entfallen.
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+
+# Gameserver werden als Kindprozesse gestartet - deshalb KEIN PrivateTmp/ProtectHome,
+# das wuerde die Server-Verzeichnisse abschneiden.
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target

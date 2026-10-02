@@ -1,0 +1,128 @@
+@import "tailwindcss";
+
+/*
+ * Schriften liegen im Bundle, nicht bei Google.
+ *
+ * Ein Panel fuer eine Cloud muss auch im LAN ohne Internet funktionieren - eine
+ * Schrift von einem fremden Server waere genau dann weg, wenn man sie braucht.
+ */
+@import "@fontsource/fira-sans/300.css";
+@import "@fontsource/fira-sans/400.css";
+@import "@fontsource/fira-sans/500.css";
+@import "@fontsource/fira-sans/600.css";
+@import "@fontsource/fira-code/400.css";
+@import "@fontsource/fira-code/500.css";
+
+/*
+ * Farben und Abstaende des Dashboards.
+ *
+ * Dunkel als einziger Modus: Das Panel steht neben Server-Konsolen und Logs, und ein
+ * heller Entwurf waere dort der Fremdkoerper. Dichte Abstaende, weil hier Tabellen und
+ * Zahlen stehen, keine Marketingseite.
+ */
+@theme {
+  --color-bg: #0f172a;
+  --color-surface: #1b2336;
+  --color-surface-2: #272f42;
+  --color-line: #2c3650;
+  --color-line-strong: #475569;
+
+  --color-text: #f8fafc;
+  --color-text-muted: #94a3b8;
+  --color-text-faint: #64748b;
+
+  /* Statusgruen aus dem Entwurf - dieselbe Bedeutung wie RUNNING in der Konsole. */
+  --color-ok: #22c55e;
+  --color-warn: #f59e0b;
+  --color-bad: #ef4444;
+
+  /* Die Markenfarben der Cloud - dieselben wie MOTD und Tab-Kopf im Spiel. */
+  --color-brand: #4a9eff;
+  --color-brand-2: #8c52ff;
+
+  --font-sans: "Fira Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Fira Code", ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  --radius-card: 0.625rem;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-bg font-sans text-[15px] text-text antialiased;
+}
+
+/*
+ * Ein sichtbarer Fokusring auf allem, was bedienbar ist.
+ *
+ * Nicht nur fuer die Tastatur: Wer mit Maus arbeitet, sieht ihn nie, weil :focus-visible
+ * ihn dort unterdrueckt. Entfernen waere das Ende der Bedienbarkeit ohne Maus.
+ */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--color-brand);
+    outline-offset: 2px;
+  }
+
+  button,
+  [role="button"],
+  summary {
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+  }
+
+  /* Zahlen in Tabellen sollen untereinander stehen. */
+  table {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/*
+ * Wer Bewegung reduziert haben will, bekommt keine.
+ *
+ * Die Oberflaeche bleibt vollstaendig bedienbar - es faellt nur das Ein- und Ausblenden
+ * weg, nicht der Inhalt.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@keyframes vc-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@keyframes vc-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+
+.vc-fade-in {
+  animation: vc-fade-in 180ms ease-out;
+}
+
+.vc-slide-in {
+  animation: vc-slide-in 200ms ease-out;
+}
+
+/* Die Serverkonsole braucht feste Breiten, sonst verrutschen die Spalten. */
+.console {
+  font-family: var(--font-mono);
+}

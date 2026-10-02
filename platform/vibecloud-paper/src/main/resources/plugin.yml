@@ -1,0 +1,10 @@
+name: vibeCloud
+version: 0.1.0
+main: de.kevloe.vibecloud.paper.VibeCloudPaper
+# Laut apiVersioning.json von paper-api 26.2.build.129-stable ist das die aktuelle
+# API-Version - nicht geraten, sondern aus dem Jar gelesen.
+api-version: "26.2"
+author: kevloe
+description: Gameserver-Anbindung an die vibeCloud
+# Ohne die Cloud laeuft der Server trotzdem - das Plugin bleibt dann nur inaktiv.
+load: POSTWORLD
