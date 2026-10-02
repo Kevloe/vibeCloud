@@ -33,9 +33,9 @@ import java.util.Map;
  *
  * <p>Diese Klasse startet nur den Server und haengt die Routengruppen ein. Die Endpunkte
  * selbst stehen in {@link AuthRoutes} (Anmeldung), {@link CloudRoutes} (Lesen),
- * {@link AdminRoutes} (Schreiben), {@link PermissionRoutes} (Rechte) und
- * {@link MessageRoutes} (Sprachen) - eine Klasse mit allem waere mit dem Dashboard schnell
- * unleserlich geworden.
+ * {@link AdminRoutes} (Schreiben), {@link PermissionRoutes} (Rechte),
+ * {@link MessageRoutes} (Sprachen), {@link SettingsRoutes} (Einstellungen) und
+ * {@link SftpRoutes} (der eigene SFTP-Zugang) - eine Klasse mit allem waere mit dem Dashboard schnell unleserlich geworden.
  *
  * <p>Standardmaessig <b>aus</b> ({@code http.enabled} in der config.json). Ein offener Port
  * mit Schreibzugriff auf das Netzwerk soll eine Entscheidung sein, kein Nebeneffekt.
@@ -43,6 +43,18 @@ import java.util.Map;
 public final class HttpApi implements AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(HttpApi.class);
+
+    /** Das Log eines Servers mitlesen - das Recht von {@code screen}. */
+    public static final String CONSOLE_PERMISSION = "vibecloud.command.screen";
+
+    /**
+     * Befehle in die Konsole eines Servers schreiben.
+     *
+     * <p>Unter {@code screen}, weil es dessen schreibende Haelfte ist - aber ein eigener
+     * Knoten: {@code vibecloud.command.screen} allein deckt ihn nicht ab ("a.b" deckt
+     * "a.b.c" nicht ab). Wer mitlesen darf, darf damit noch nicht {@code op} tippen.
+     */
+    public static final String CONSOLE_SEND_PERMISSION = CONSOLE_PERMISSION + ".send";
     private static final Gson GSON = new Gson();
 
     private final AuthRoutes authRoutes;
@@ -50,6 +62,8 @@ public final class HttpApi implements AutoCloseable {
     private final AdminRoutes adminRoutes;
     private final PermissionRoutes permissionRoutes;
     private final MessageRoutes messageRoutes;
+    private final SettingsRoutes settingsRoutes;
+    private final SftpRoutes sftpRoutes;
     private final WsRoutes wsRoutes;
 
     private Javalin javalin;
@@ -71,7 +85,12 @@ public final class HttpApi implements AutoCloseable {
                    ConsoleBuffer console, OnlinePlayers online, AuditLog audit,
                    Path modulesDirectory,
                    de.kevloe.vibecloud.master.message.MessageDistributor messages,
-                   CommandRegistry commands) {
+                   CommandRegistry commands,
+                   de.kevloe.vibecloud.master.settings.MaintenanceSwitch maintenance,
+                   de.kevloe.vibecloud.master.config.MasterConfigFile configFile,
+                   de.kevloe.vibecloud.master.sftp.SftpAccountService sftpAccounts,
+                   de.kevloe.vibecloud.master.server.StaticBindingRepository bindings,
+                   de.kevloe.vibecloud.master.sftp.TemplateSftp templateSftp) {
 
         ApiAuth auth = new ApiAuth(tokens, accounts, permissions, jwt);
         WsTickets wsTickets = new WsTickets();
@@ -81,10 +100,13 @@ public final class HttpApi implements AutoCloseable {
                 nodeRepository, nodes, players, permissions, ranks, transfers, modules,
                 online);
         this.adminRoutes = new AdminRoutes(auth, groups, servers, nodeRepository, ranks,
-                permissions, modules, audit, modulesDirectory);
+                permissions, modules, audit, modulesDirectory, maintenance);
         this.permissionRoutes = new PermissionRoutes(auth, permissions, ranks, players,
                 commands);
         this.messageRoutes = new MessageRoutes(auth, messages, audit);
+        this.settingsRoutes = new SettingsRoutes(auth, maintenance, configFile, groups, audit);
+        this.sftpRoutes = new SftpRoutes(auth, sftpAccounts, bindings, nodes, groups,
+                templateSftp);
         this.wsRoutes = new WsRoutes(wsTickets, permissions, servers, console);
     }
 
@@ -129,6 +151,8 @@ public final class HttpApi implements AutoCloseable {
             adminRoutes.register(settings.routes);
             permissionRoutes.register(settings.routes);
             messageRoutes.register(settings.routes);
+            settingsRoutes.register(settings.routes);
+            sftpRoutes.register(settings.routes);
             wsRoutes.register(settings.routes);
 
             // Das gebaute Dashboard liegt als Dateien daneben - ein eigener Webserver

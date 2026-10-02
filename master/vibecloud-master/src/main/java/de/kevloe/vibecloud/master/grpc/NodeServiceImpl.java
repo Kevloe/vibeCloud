@@ -16,6 +16,7 @@ import de.kevloe.vibecloud.master.scheduler.PlacementScheduler;
 import de.kevloe.vibecloud.master.server.ServerGroupRepository;
 import de.kevloe.vibecloud.master.server.ServerHistoryRepository;
 import de.kevloe.vibecloud.master.server.ServerRegistry;
+import de.kevloe.vibecloud.master.sftp.SftpAccountService;
 import de.kevloe.vibecloud.master.template.LogArchive;
 import de.kevloe.vibecloud.master.template.TemplateStore;
 import de.kevloe.vibecloud.protocol.Ack;
@@ -32,6 +33,8 @@ import de.kevloe.vibecloud.protocol.RegisterRequest;
 import de.kevloe.vibecloud.protocol.RegisterResponse;
 import de.kevloe.vibecloud.protocol.RunningServer;
 import de.kevloe.vibecloud.protocol.ServerStateChanged;
+import de.kevloe.vibecloud.protocol.SftpAuthRequest;
+import de.kevloe.vibecloud.protocol.SftpAuthResponse;
 import de.kevloe.vibecloud.protocol.TemplateManifest;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
@@ -76,6 +79,7 @@ public final class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
     private final PluginConnectionRegistry plugins;
     private final PluginServiceImpl pluginService;
     private final ServerSessionStore sessions;
+    private final SftpAccountService sftp;
 
     public NodeServiceImpl(NodeRegistry nodes, EventCursorStore cursors, AuditLog audit,
                            ServerRegistry servers, ServerGroupRepository groups,
@@ -83,7 +87,8 @@ public final class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
                            ConsoleBuffer console, LogArchive logs,
                            PlacementScheduler scheduler, int heartbeatIntervalSeconds,
                            PluginConnectionRegistry plugins, PluginServiceImpl pluginService,
-                           ServerSessionStore sessions) {
+                           ServerSessionStore sessions, SftpAccountService sftp) {
+        this.sftp = sftp;
         this.nodes = nodes;
         this.cursors = cursors;
         this.audit = audit;
@@ -159,7 +164,9 @@ public final class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
                 request.getOsName(),
                 request.getWrapperVersion(),
                 skew,
-                serverAddress));
+                serverAddress,
+                request.getSftpPort(),
+                request.getSftpHostKey()));
 
         audit.record("SYSTEM", "node.registered", node,
                 Map.of("apiVersion", request.getApiVersion(),
@@ -524,6 +531,31 @@ public final class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
                 }
             }
         };
+    }
+
+    // ---------------------------------------------------------------- SFTP
+
+    /**
+     * Ein Wrapper fragt, ob eine SFTP-Anmeldung gilt.
+     *
+     * <p>Der Node-Name kommt aus der Verbindung, nicht aus der Nachricht - und
+     * {@link SftpAccountService#authenticate} prueft damit, dass der Server an genau
+     * diesen Node gebunden ist.
+     */
+    @Override
+    public void authenticateSftp(SftpAuthRequest request,
+                                 StreamObserver<SftpAuthResponse> responseObserver) {
+        String node = requireNode().node();
+
+        SftpAccountService.Decision decision = sftp.authenticate(node,
+                request.getUsername(), request.getServerName(), request.getPassword(),
+                request.getClientIp().isBlank() ? "unbekannt" : request.getClientIp());
+
+        responseObserver.onNext(SftpAuthResponse.newBuilder()
+                .setAllowed(decision.allowed())
+                .setDetail(decision.detail())
+                .build());
+        responseObserver.onCompleted();
     }
 
     // ---------------------------------------------------------------- Hilfsmittel

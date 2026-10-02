@@ -47,6 +47,7 @@ build/
 /master/*/dashboard/
 /master/*/logs/
 /wrapper/*/wrapper.json
+/wrapper/*/secrets/
 /wrapper/*/servers/
 /wrapper/*/outbox/
 /wrapper/*/cache/

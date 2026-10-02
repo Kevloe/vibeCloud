@@ -117,6 +117,36 @@ class LocalServerManagerCleanupTest {
         assertThat(ProcessHandle.current().isAlive()).isTrue();
     }
 
+    // ---------------------------------------------------------------- SFTP
+
+    @Test
+    @DisplayName("SFTP gibt es nur in das Verzeichnis eines statischen Servers")
+    void sftpNurFuerStatischeServer() throws IOException {
+        Path survival = leftover("survival-1", true);
+        leftover("lobby-1", false);
+        Files.createDirectories(root.resolve("servers/ohne-spur"));
+
+        assertThat(manager.staticDirectory("survival-1")).contains(survival);
+        // Das Verzeichnis eines dynamischen Servers ist nach dem Stopp weg - und alles
+        // Hochgeladene mit ihm.
+        assertThat(manager.staticDirectory("lobby-1")).isEmpty();
+        assertThat(manager.staticDirectory("ohne-spur")).isEmpty();
+        assertThat(manager.staticDirectory("gibtsnicht")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Ein Servername ist kein Pfad")
+    void servernameIstKeinPfad() throws IOException {
+        leftover("survival-1", true);
+
+        // Der Name kommt aus dem SFTP-Benutzernamen, also von aussen.
+        for (String boese : java.util.List.of("..", "../servers/survival-1", "survival-1/..",
+                "survival-1/world", "", ".", "SURVIVAL-1")) {
+            assertThat(manager.staticDirectory(boese)).as("Name %s", boese).isEmpty();
+        }
+        assertThat(manager.staticDirectory(null)).isEmpty();
+    }
+
     /** Ein Serververzeichnis, wie es ein abgebrochener Lauf hinterlaesst. */
     private Path leftover(String name, boolean staticServer) throws IOException {
         Path directory = root.resolve("servers").resolve(name);

@@ -43,6 +43,10 @@ final class CloudRoutes {
     private static final String READ = "cloud.read";
     private static final String WRITE = "cloud.write";
 
+    private static final String CONSOLE_SEND = HttpApi.CONSOLE_SEND_PERMISSION;
+
+    private static final int MAX_COMMAND_LENGTH = 1000;
+
     private final ApiAuth auth;
     private final ServerRegistry servers;
     private final ServerService serverService;
@@ -79,6 +83,7 @@ final class CloudRoutes {
         routes.get("/api/v1/servers", this::listServers)
                 .post("/api/v1/servers/{name}/stop", this::stopServer)
                 .post("/api/v1/servers/{name}/kill", this::killServer)
+                .post("/api/v1/servers/{name}/command", this::sendCommand)
                 .get("/api/v1/groups", this::listGroups)
                 .post("/api/v1/groups/{name}/start", this::startServer)
                 .get("/api/v1/nodes", this::listNodes)
@@ -124,6 +129,60 @@ final class CloudRoutes {
             return;
         }
         context.json(Map.of("killed", name));
+    }
+
+    /**
+     * Schreibt eine Zeile in die Konsole eines Servers - der schreibende Teil von
+     * {@code screen}.
+     *
+     * <p>Derselbe Weg wie in der Master-Konsole ({@link ServerService#execute}), aber ein
+     * <b>eigenes Recht</b>: {@value HttpApi#CONSOLE_SEND_PERMISSION}. Das Log mitzulesen und Befehle
+     * abzusetzen ist nicht dasselbe - in der Konsole eines Gameservers gibt es {@code op},
+     * und wer das tippen darf, darf auf diesem Server alles. In der Master-Konsole faellt
+     * der Unterschied nicht auf, weil dort ohnehin jeder alles darf.
+     *
+     * <p>Genau eine Zeile: Ein Zeilenumbruch waere ein zweiter Befehl, der im Protokoll
+     * nicht als solcher auftaucht.
+     */
+    private void sendCommand(Context context) {
+        if (!auth.require(context, WRITE, CONSOLE_SEND)) {
+            return;
+        }
+        String name = context.pathParam("name");
+        Map<?, ?> body;
+        try {
+            body = GSON.fromJson(context.body(), Map.class);
+        } catch (RuntimeException exception) {
+            ApiAuth.fail(context, HttpStatus.BAD_REQUEST, "Rumpf ist kein JSON");
+            return;
+        }
+        Object given = body == null ? null : body.get("command");
+        if (!(given instanceof String line) || line.isBlank()) {
+            ApiAuth.fail(context, HttpStatus.BAD_REQUEST, "Feld 'command' fehlt");
+            return;
+        }
+        if (line.contains("\n") || line.contains("\r")) {
+            ApiAuth.fail(context, HttpStatus.BAD_REQUEST, "Nur eine Zeile je Aufruf");
+            return;
+        }
+        if (line.length() > MAX_COMMAND_LENGTH) {
+            ApiAuth.fail(context, HttpStatus.BAD_REQUEST,
+                    "Hoechstens " + MAX_COMMAND_LENGTH + " Zeichen");
+            return;
+        }
+        if (servers.find(name).isEmpty()) {
+            ApiAuth.fail(context, HttpStatus.NOT_FOUND, "Unbekannter Server: " + name);
+            return;
+        }
+        // Der Dienst schreibt den Befehl samt Absender ins Protokoll.
+        if (!serverService.execute(name, line.strip(), actor(context))) {
+            ApiAuth.fail(context, HttpStatus.SERVICE_UNAVAILABLE,
+                    "Der Node von " + name + " ist nicht erreichbar");
+            return;
+        }
+        // "angenommen", nicht "ausgefuehrt": Was der Server daraus macht, steht in
+        // seinem Log - eine Antwort auf einen Befehl gibt es in dieser Richtung nicht.
+        context.json(Map.of("accepted", true, "server", name));
     }
 
     private void startServer(Context context) {

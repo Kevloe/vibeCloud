@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Icon, type IconName } from "./Icon";
 
 export type NavEntry<T extends string> = {
@@ -24,12 +24,15 @@ export function Sidebar<T extends string>({
   onNavigate,
   accountName,
   onLogout,
+  footer,
 }: {
   entries: Array<NavEntry<T>>;
   current: T;
   onNavigate: (id: T) => void;
   accountName: string;
   onLogout: () => void;
+  /** Steht zwischen den Seiten und dem eigenen Zugang - etwa der Wartungsschalter. */
+  footer?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -123,6 +126,9 @@ export function Sidebar<T extends string>({
             );
           })}
         </ul>
+
+        {/* Was fuer das ganze Netzwerk gilt und von jeder Seite aus erreichbar sein muss. */}
+        {footer}
 
         {/*
           Der eigene Zugang steht unten, weil man ihn selten braucht - aber immer an

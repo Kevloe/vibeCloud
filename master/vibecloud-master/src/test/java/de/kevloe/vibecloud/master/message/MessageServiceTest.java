@@ -197,4 +197,121 @@ class MessageServiceTest {
         assertThat(service.localeFiles()).containsExactly("de", "en");
         assertThat(service.bundle().availableLocales()).contains("fr");
     }
+
+    // ---------------------------------------------------------------- Texte der Module
+
+    /** Ein Master mit einem Modul, das zwei deutsche Texte mitbringt. */
+    private MessageService mitModul() throws IOException {
+        MessageService service = new MessageService(
+                directory.resolve("messages"), directory.resolve("modules"));
+        service.registerModuleMessages("punishment", Map.of("de", Map.of(
+                "ban.screen", "Du bist gebannt",
+                "mute.chat", "Du bist stumm")));
+        return service;
+    }
+
+    @Test
+    @DisplayName("Ein eigener Text ersetzt den des Moduls")
+    void eigenerTextErsetztDenDesModuls() throws IOException {
+        MessageService service = mitModul();
+
+        service.saveModuleEntries("punishment", "de", Map.of(
+                "ban.screen", "Gesperrt, it's over",
+                "mute.chat", "Du bist stumm"));
+        service.reload();
+
+        assertThat(service.bundle().raw("de", "punishment.ban.screen"))
+                .isEqualTo("Gesperrt, it's over");
+        assertThat(service.bundle().raw("de", "punishment.mute.chat"))
+                .isEqualTo("Du bist stumm");
+    }
+
+    @Test
+    @DisplayName("Gespeichert wird nur, was vom Modul abweicht")
+    void gespeichertWirdNurDieAbweichung() throws IOException {
+        MessageService service = mitModul();
+
+        int own = service.saveModuleEntries("punishment", "de", Map.of(
+                "ban.screen", "Gesperrt",
+                "mute.chat", "Du bist stumm"));
+
+        // Stuende der unveraenderte Text mit in der Datei, froere er dort ein - und ein
+        // Update des Moduls aenderte ihn nicht mehr.
+        assertThat(own).isEqualTo(1);
+        assertThat(service.moduleOverrides("punishment", "de"))
+                .containsOnlyKeys("ban.screen");
+
+        // Das Modul bringt in einer neuen Version einen anderen Text mit.
+        service.registerModuleMessages("punishment", Map.of("de", Map.of(
+                "ban.screen", "Du bist gebannt (neu)",
+                "mute.chat", "Stumm (neu)")));
+
+        assertThat(service.bundle().raw("de", "punishment.mute.chat")).isEqualTo("Stumm (neu)");
+        assertThat(service.bundle().raw("de", "punishment.ban.screen")).isEqualTo("Gesperrt");
+    }
+
+    @Test
+    @DisplayName("Zurueck auf den Text des Moduls entfernt die Datei")
+    void zurueckAufDenModulTextEntferntDieDatei() throws IOException {
+        MessageService service = mitModul();
+        service.saveModuleEntries("punishment", "de", Map.of("ban.screen", "Gesperrt"));
+        Path file = directory.resolve("modules/punishment/messages/de.yml");
+        assertThat(file).exists();
+
+        service.saveModuleEntries("punishment", "de", Map.of("ban.screen", "Du bist gebannt"));
+        service.reload();
+
+        assertThat(file).doesNotExist();
+        assertThat(service.bundle().raw("de", "punishment.ban.screen"))
+                .isEqualTo("Du bist gebannt");
+    }
+
+    @Test
+    @DisplayName("Ein Modul laesst sich in eine Sprache uebersetzen, die es nicht mitbringt")
+    void modulInFremderSprache() throws IOException {
+        MessageService service = mitModul();
+        service.createLocale("en");
+
+        service.saveModuleEntries("punishment", "en", Map.of("ban.screen", "You are banned"));
+        service.reload();
+
+        assertThat(service.bundle().raw("en", "punishment.ban.screen"))
+                .isEqualTo("You are banned");
+        assertThat(service.moduleEntries("punishment", "en")).containsOnlyKeys("ban.screen");
+        // Die Datei der Cloud bleibt frei von Modul-Texten.
+        assertThat(service.entriesOfFile("en")).doesNotContainKey("punishment.ban.screen");
+    }
+
+    @Test
+    @DisplayName("Eigene Texte bringen eine geloeschte Sprache nicht zurueck")
+    void eigeneTexteBringenKeineSpracheZurueck() throws IOException {
+        MessageService service = mitModul();
+        service.createLocale("en");
+        service.saveModuleEntries("punishment", "en", Map.of("ban.screen", "You are banned"));
+
+        service.deleteLocale("en");
+        service.reload();
+
+        assertThat(service.bundle().availableLocales()).doesNotContain("en");
+        assertThatThrownBy(() -> service.saveModuleEntries("punishment", "en",
+                Map.of("ban.screen", "Again")))
+                .isInstanceOf(java.util.NoSuchElementException.class);
+    }
+
+    @Test
+    @DisplayName("Texte gibt es nur zu einem geladenen Modul")
+    void nurZuEinemGeladenenModul() throws IOException {
+        MessageService service = mitModul();
+
+        // Die Kennung wird zu einem Verzeichnis - ein Modul, das nicht geladen ist, ist
+        // deshalb auch der Schutz vor "../../config".
+        for (String boese : java.util.List.of("../..", "gibtsnicht", "")) {
+            assertThatThrownBy(() -> service.saveModuleEntries(boese, "de",
+                    Map.of("ban.screen", "x")))
+                    .as("Modul %s", boese)
+                    .isInstanceOf(java.util.NoSuchElementException.class);
+        }
+        assertThatThrownBy(() -> service.moduleEntries("punishment", "../de"))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }

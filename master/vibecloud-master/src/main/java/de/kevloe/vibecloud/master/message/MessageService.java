@@ -41,8 +41,22 @@ public final class MessageService {
     private final Map<String, Map<String, Map<String, String>>> moduleMessages =
             new java.util.concurrent.ConcurrentHashMap<>();
 
+    /**
+     * Wo die Module ihre Datenverzeichnisse haben ({@code modules/}), oder {@code null}.
+     *
+     * <p>Dort liegen die eigenen Texte des Betreibers zu einem Modul:
+     * {@code modules/<id>/messages/<sprache>.yml}. Ohne dieses Verzeichnis gibt es nur die
+     * Texte aus den JARs.
+     */
+    private final Path moduleRoot;
+
     public MessageService(Path directory) throws IOException {
+        this(directory, null);
+    }
+
+    public MessageService(Path directory, Path moduleRoot) throws IOException {
         this.directory = directory;
+        this.moduleRoot = moduleRoot;
         Files.createDirectories(directory);
         extractDefaultIfMissing();
         appendMissingDefaults();
@@ -142,12 +156,15 @@ public final class MessageService {
 
         // Modul-Texte unter ihrer Modul-Id einhaengen: "punishment.ban.screen".
         // So kann ein Modul keine Core-Texte ueberschreiben (PLAN.md Abschnitt 11a).
-        moduleMessages.forEach((moduleId, byLocale) ->
-                byLocale.forEach((locale, entries) -> {
-                    Map<String, String> target = locales.computeIfAbsent(locale,
-                            key -> new LinkedHashMap<>());
-                    entries.forEach((key, value) -> target.put(moduleId + "." + key, value));
-                }));
+        moduleMessages.forEach((moduleId, byLocale) -> {
+            byLocale.forEach((locale, entries) -> {
+                Map<String, String> target = locales.computeIfAbsent(locale,
+                        key -> new LinkedHashMap<>());
+                entries.forEach((key, value) -> target.put(moduleId + "." + key, value));
+            });
+            // Danach, damit der eigene Text des Betreibers den aus dem JAR ersetzt.
+            overlayModuleOverrides(moduleId, locales);
+        });
 
         MessageBundle loaded = new MessageBundle(DEFAULT_LOCALE, locales);
         warnAboutGaps(loaded);
@@ -259,9 +276,16 @@ public final class MessageService {
      */
     public void saveFile(String locale, Map<String, String> entries) throws IOException {
         requireValid(locale);
-        StringBuilder text = new StringBuilder(
+        writeFlat(fileOf(locale),
                 "# Von vibeCloud geschrieben (Dashboard). Flache Schluessel in Punkt-Schreibweise;\n"
-                + "# Format der Texte ist MiniMessage, Platzhalter sind benannt: <spieler>.\n\n");
+                + "# Format der Texte ist MiniMessage, Platzhalter sind benannt: <spieler>.\n\n",
+                entries);
+    }
+
+    /** Eine Stelle fuer beide Arten von Dateien - die der Cloud und die zu einem Modul. */
+    private static void writeFlat(Path file, String header, Map<String, String> entries)
+            throws IOException {
+        StringBuilder text = new StringBuilder(header);
 
         entries.entrySet().stream()
                 .sorted(Map.Entry.comparingByKey())
@@ -273,8 +297,7 @@ public final class MessageService {
 
         // Erst daneben schreiben, dann umbenennen: Faellt der Master mitten im Schreiben
         // aus, ist die alte Datei noch heil statt halb ueberschrieben.
-        Path file = fileOf(locale);
-        Path temporary = directory.resolve(locale + SUFFIX + ".tmp");
+        Path temporary = file.resolveSibling(file.getFileName() + ".tmp");
         Files.writeString(temporary, text.toString());
         Files.move(temporary, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
     }
@@ -311,6 +334,139 @@ public final class MessageService {
 
     private Path fileOf(String locale) {
         return directory.resolve(locale + SUFFIX);
+    }
+
+    // ---------------------------------------------------------------- Texte der Module
+
+    /**
+     * Erlaubte Modul-Kennungen fuer eigene Texte.
+     *
+     * <p>Wie bei der Sprachkennung: Die Kennung wird zu einem Verzeichnisnamen, und
+     * {@code module.json} prueft nur, dass sie nicht leer ist.
+     */
+    private static final java.util.regex.Pattern SAFE_MODULE_ID =
+            java.util.regex.Pattern.compile("[A-Za-z0-9][A-Za-z0-9_-]*");
+
+    /** Module, die gerade Texte eingehaengt haben - alphabetisch. */
+    public List<String> modulesWithMessages() {
+        return moduleMessages.keySet().stream().sorted().toList();
+    }
+
+    /**
+     * Der Text, den das Modul selbst mitbringt - ohne Praefix, ohne eigene Aenderungen.
+     *
+     * <p>Leer, wenn das JAR diese Sprache nicht hat.
+     */
+    public Map<String, String> moduleBundled(String moduleId, String locale) {
+        requireValid(locale);
+        return requireModule(moduleId).getOrDefault(locale, Map.of());
+    }
+
+    /**
+     * Was im Spiel gilt: der Text des Moduls, ersetzt durch den eigenen, wo es einen gibt.
+     */
+    public Map<String, String> moduleEntries(String moduleId, String locale)
+            throws IOException {
+        Map<String, String> entries = new java.util.TreeMap<>(moduleBundled(moduleId, locale));
+        entries.putAll(moduleOverrides(moduleId, locale));
+        return entries;
+    }
+
+    /** Die eigenen Texte des Betreibers zu einem Modul - nur die Abweichungen. */
+    public Map<String, String> moduleOverrides(String moduleId, String locale)
+            throws IOException {
+        requireValid(locale);
+        requireModule(moduleId);
+        Path file = moduleFile(moduleId, locale);
+        if (file == null || !Files.exists(file)) {
+            return Map.of();
+        }
+        try (InputStream in = Files.newInputStream(file)) {
+            return MessageBundle.loadYaml(in);
+        }
+    }
+
+    /**
+     * Speichert die Texte eines Moduls - aber nur, was vom JAR abweicht.
+     *
+     * <p>Das ist der Unterschied zur Datei der Cloud: Stuende hier der ganze Satz, froere
+     * er die Texte des Moduls ein, und ein Update aenderte keinen einzigen mehr. So folgt
+     * jeder Text, den niemand angefasst hat, weiter dem Modul.
+     *
+     * @return wie viele eigene Texte danach in der Datei stehen
+     */
+    public int saveModuleEntries(String moduleId, String locale, Map<String, String> entries)
+            throws IOException {
+        Map<String, String> bundled = moduleBundled(moduleId, locale);
+        if (!Files.exists(fileOf(locale))) {
+            // Sonst laege eine Uebersetzung herum, die nie jemand zu sehen bekommt.
+            throw new java.util.NoSuchElementException("Sprache " + locale + " gibt es nicht");
+        }
+        Path file = moduleFile(moduleId, locale);
+        if (file == null) {
+            throw new IllegalStateException("Eigene Texte fuer Module sind nicht eingerichtet");
+        }
+
+        Map<String, String> overrides = new java.util.TreeMap<>();
+        entries.forEach((key, value) -> {
+            if (!value.equals(bundled.get(key))) {
+                overrides.put(key, value);
+            }
+        });
+
+        if (overrides.isEmpty()) {
+            Files.deleteIfExists(file);
+            return 0;
+        }
+        Files.createDirectories(file.getParent());
+        writeFlat(file,
+                "# Eigene Texte zum Modul " + moduleId + " (Dashboard). Hier steht nur, was vom\n"
+                + "# Text des Moduls abweicht - alles andere kommt weiter aus dem JAR.\n\n",
+                overrides);
+        return overrides.size();
+    }
+
+    /**
+     * Legt die eigenen Texte ueber die aus dem JAR.
+     *
+     * <p>Nur fuer Sprachen, die es schon gibt: Eine Uebersetzung zu einer geloeschten
+     * Sprache bleibt liegen und ist wieder da, wenn die Sprache neu angelegt wird - sie
+     * darf die Sprache aber nicht von selbst zurueckbringen.
+     */
+    private void overlayModuleOverrides(String moduleId,
+                                        Map<String, Map<String, String>> locales) {
+        for (Map.Entry<String, Map<String, String>> locale : locales.entrySet()) {
+            Path file = moduleFile(moduleId, locale.getKey());
+            if (file == null || !Files.exists(file)) {
+                continue;
+            }
+            try (InputStream in = Files.newInputStream(file)) {
+                MessageBundle.loadYaml(in).forEach((key, value) ->
+                        locale.getValue().put(moduleId + "." + key, value));
+            } catch (IOException exception) {
+                LOG.error("Eigene Texte {} konnten nicht gelesen werden - es gelten die des "
+                          + "Moduls", file, exception);
+            }
+        }
+    }
+
+    private Map<String, Map<String, String>> requireModule(String moduleId) {
+        Map<String, Map<String, String>> byLocale =
+                moduleId == null ? null : moduleMessages.get(moduleId);
+        if (byLocale == null) {
+            throw new java.util.NoSuchElementException(
+                    "Das Modul " + moduleId + " ist nicht geladen oder bringt keine Texte mit");
+        }
+        return byLocale;
+    }
+
+    /** {@code null}, wenn es kein Modul-Verzeichnis gibt oder die Kennung kein Name ist. */
+    private Path moduleFile(String moduleId, String locale) {
+        if (moduleRoot == null || !SAFE_MODULE_ID.matcher(moduleId).matches()
+            || !isValidLocale(locale)) {
+            return null;
+        }
+        return moduleRoot.resolve(moduleId).resolve("messages").resolve(locale + SUFFIX);
     }
 
     private static void requireValid(String locale) {

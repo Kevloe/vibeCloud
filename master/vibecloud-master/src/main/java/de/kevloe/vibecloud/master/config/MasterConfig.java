@@ -12,6 +12,29 @@ public final class MasterConfig {
     public Database database = new Database();
     public Http http = new Http();
     public Servers servers = new Servers();
+    public Sftp sftp = new Sftp();
+
+    public static final class Sftp {
+        /**
+         * SFTP-Zugang zu den <b>Templates</b> der Gruppen.
+         *
+         * <p>Standardmaessig aus: Wer ein Template aendert, aendert jeden Server der Gruppe
+         * auf jedem Node - beim naechsten Start laeuft dort, was hochgeladen wurde. Ein
+         * offener Port dafuer soll eine Entscheidung sein.
+         *
+         * <p>Die Verzeichnisse statischer Server liegen nicht hier, sondern auf ihren
+         * Nodes; dafuer gibt es denselben Schalter in der {@code wrapper.json}.
+         */
+        public boolean enabled = false;
+
+        /**
+         * Nicht 2222 wie beim Wrapper: Laufen Master und Wrapper auf demselben Rechner,
+         * stritten sie sich sonst um den Port.
+         */
+        public int port = 2223;
+
+        public String bindAddress = "0.0.0.0";
+    }
 
     public static final class Grpc {
         public String bindAddress = "0.0.0.0";

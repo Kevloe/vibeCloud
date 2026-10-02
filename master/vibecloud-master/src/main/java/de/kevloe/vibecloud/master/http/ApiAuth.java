@@ -126,6 +126,22 @@ public final class ApiAuth {
         return principal;
     }
 
+    /**
+     * Ob der Aufrufer der laufenden Anfrage auch dieses Recht haette.
+     *
+     * <p>Fuer Antworten, die der Oberflaeche sagen, was sie anbieten soll - einen Schalter,
+     * den man nicht umlegen darf, zeigt sie besser gar nicht erst als benutzbar. Das ist
+     * eine Auskunft, keine Pruefung: Der Endpunkt, der wirklich schaltet, ruft weiter
+     * {@link #require}.
+     *
+     * @return false auch dann, wenn die Anfrage noch nicht geprueft wurde
+     */
+    public boolean allows(Context context, String scope, String permission) {
+        return of(context)
+                .map(caller -> caller.allows(scope, permission, permissions))
+                .orElse(false);
+    }
+
     /** Der geprueft Aufrufer der laufenden Anfrage. */
     public static Optional<Principal> of(Context context) {
         return Optional.ofNullable(context.attribute(PRINCIPAL));

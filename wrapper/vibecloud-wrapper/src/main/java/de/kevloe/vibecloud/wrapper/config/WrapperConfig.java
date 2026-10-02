@@ -50,6 +50,24 @@ public final class WrapperConfig {
 
     public Firewall firewall = new Firewall();
 
+    public Sftp sftp = new Sftp();
+
+    public static final class Sftp {
+        /**
+         * SFTP-Zugang zu den Verzeichnissen der <b>statischen</b> Server dieses Nodes.
+         *
+         * <p>Standardmaessig aus: Es ist der einzige Port, den ein Root fuer die Cloud nach
+         * aussen oeffnet, und wer ueber ihn hereinkommt, kann Plugins hochladen - also Code
+         * auf diesem Node ausfuehren. Das soll eine Entscheidung sein, kein Nebeneffekt.
+         */
+        public boolean enabled = false;
+
+        /** Nicht 22: Dort lauscht auf einem Root der SSH-Dienst des Betriebssystems. */
+        public int port = 2222;
+
+        public String bindAddress = "0.0.0.0";
+    }
+
     public static final class Firewall {
         /**
          * Wenn aktiv, pflegt der Wrapper ein nftables-Set mit den Proxy-IPs, damit die

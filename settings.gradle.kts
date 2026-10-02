@@ -22,6 +22,8 @@ include(
     ":common:vibecloud-protocol",
     ":common:vibecloud-common",
     ":common:vibecloud-api",
+    // Nur fuer Master und Wrapper - siehe build.gradle.kts dort.
+    ":common:vibecloud-sftp",
     ":master:vibecloud-master",
     ":wrapper:vibecloud-wrapper",
     ":platform:vibecloud-velocity",

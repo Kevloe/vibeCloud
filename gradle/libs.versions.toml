@@ -24,6 +24,10 @@ gson              = "2.14.0"
 bouncycastle      = "1.86"
 snakeyaml         = "2.7"
 
+# --- Wrapper ---
+# SFTP-Zugang zu den Verzeichnissen statischer Server.
+sshd              = "2.20.0"
+
 # --- Logging ---
 slf4j             = "2.0.20"
 logback           = "1.5.38"
@@ -64,6 +68,7 @@ gson                   = { module = "com.google.code.gson:gson",              ve
 snakeyaml              = { module = "org.yaml:snakeyaml",                      version.ref = "snakeyaml" }
 bouncycastle           = { module = "org.bouncycastle:bcprov-jdk18on",        version.ref = "bouncycastle" }
 bouncycastle-pkix      = { module = "org.bouncycastle:bcpkix-jdk18on",        version.ref = "bouncycastle" }
+sshd-sftp              = { module = "org.apache.sshd:sshd-sftp",              version.ref = "sshd" }
 
 slf4j-api              = { module = "org.slf4j:slf4j-api",                    version.ref = "slf4j" }
 logback-classic        = { module = "ch.qos.logback:logback-classic",         version.ref = "logback" }

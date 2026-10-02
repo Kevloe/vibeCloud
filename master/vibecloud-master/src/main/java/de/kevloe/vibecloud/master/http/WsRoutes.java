@@ -45,7 +45,7 @@ final class WsRoutes implements AutoCloseable {
     private static final Gson GSON = new Gson();
 
     private static final String SERVERS_PERMISSION = "vibecloud.command.server.list";
-    private static final String CONSOLE_PERMISSION = "vibecloud.command.screen";
+    private static final String CONSOLE_PERMISSION = HttpApi.CONSOLE_PERMISSION;
 
     /** Takt der Zustands-Aufnahmen. */
     private static final int SNAPSHOT_SECONDS = 2;

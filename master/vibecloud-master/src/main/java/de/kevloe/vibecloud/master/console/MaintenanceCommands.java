@@ -1,13 +1,10 @@
 package de.kevloe.vibecloud.master.console;
 
-import de.kevloe.vibecloud.master.audit.AuditLog;
-import de.kevloe.vibecloud.master.grpc.PluginConnectionRegistry;
 import de.kevloe.vibecloud.master.server.ServerGroupRepository;
-import de.kevloe.vibecloud.master.settings.CloudSettings;
+import de.kevloe.vibecloud.master.settings.MaintenanceSwitch;
 
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 
 /**
  * {@code maintenance ...} (PLAN.md Abschnitt 11, Entscheidung 17.8).
@@ -18,17 +15,12 @@ import java.util.Map;
  */
 public final class MaintenanceCommands implements CommandRegistry.Command {
 
-    private final CloudSettings settings;
+    private final MaintenanceSwitch maintenance;
     private final ServerGroupRepository groups;
-    private final AuditLog audit;
-    private final PluginConnectionRegistry plugins;
 
-    public MaintenanceCommands(CloudSettings settings, ServerGroupRepository groups,
-                               AuditLog audit, PluginConnectionRegistry plugins) {
-        this.settings = settings;
+    public MaintenanceCommands(MaintenanceSwitch maintenance, ServerGroupRepository groups) {
+        this.maintenance = maintenance;
         this.groups = groups;
-        this.audit = audit;
-        this.plugins = plugins;
     }
 
     @Override
@@ -81,11 +73,9 @@ public final class MaintenanceCommands implements CommandRegistry.Command {
 
     private void set(CommandOutput out, List<String> args, boolean active) {
         if (args.size() < 2) {
-            settings.setMaintenance(active);
-            audit.record("CONSOLE", active ? "maintenance.on" : "maintenance.off", null);
-            // Den Proxys mitteilen: Die Logins blockiert der Master selbst beim
-            // CheckLogin, aber das MOTD zeigt der Proxy - und das muss stimmen.
-            announce(true, null, active);
+            // Speichern, protokollieren und den Proxys mitteilen - dieselbe Stelle wie
+            // der Schalter im Dashboard.
+            maintenance.set(active, "CONSOLE");
             if (active) {
                 out.warn("Wartungsmodus fuer das ganze Netzwerk aktiv. Neue Logins werden "
                          + "abgelehnt; wer vibecloud.maintenance.bypass hat, kommt rein.");
@@ -97,14 +87,10 @@ public final class MaintenanceCommands implements CommandRegistry.Command {
         }
 
         String groupName = args.get(1);
-        if (groups.find(groupName).isEmpty()) {
+        if (maintenance.setGroup(groupName, active, "CONSOLE") < 0) {
             out.error("Gruppe " + groupName + " existiert nicht.");
             return;
         }
-        groups.updateField(groupName, "maintenance", Boolean.toString(active));
-        audit.record("CONSOLE", active ? "maintenance.group_on" : "maintenance.group_off",
-                groupName, Map.of("group", groupName));
-        announce(false, groupName, active);
 
         if (active) {
             out.warn("Gruppe " + groupName + " ist in Wartung. Keine neuen Verbindungen "
@@ -115,23 +101,8 @@ public final class MaintenanceCommands implements CommandRegistry.Command {
         }
     }
 
-    /** Schickt den neuen Zustand an alle verbundenen Plugins. */
-    private void announce(boolean global, String groupName, boolean active) {
-        int reached = plugins.broadcastToAll(PluginConnectionRegistry.command(builder ->
-                builder.setSetMaintenance(
-                        de.kevloe.vibecloud.protocol.SetMaintenance.newBuilder()
-                                .setGlobal(global)
-                                .setGroupName(groupName == null ? "" : groupName)
-                                .setActive(active))));
-        if (reached == 0) {
-            // Kein Plugin verbunden ist kein Fehler - aber der Betreiber soll
-            // wissen, dass gerade niemand die Aenderung sieht.
-            audit.record("CONSOLE", "maintenance.not_announced", groupName);
-        }
-    }
-
     private void list(CommandOutput out) {
-        boolean global = settings.isMaintenanceActive();
+        boolean global = maintenance.isActive();
         var inMaintenance = groups.findAll().stream()
                 .filter(de.kevloe.vibecloud.api.server.ServerGroup::maintenance)
                 .map(de.kevloe.vibecloud.api.server.ServerGroup::name)

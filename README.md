@@ -32,6 +32,9 @@ Java 25 · Gradle 9 · gRPC über TLS · PostgreSQL 17 · Velocity 4.2 · Paper 
   `punishment` (Bans, Mutes, Kicks, Verwarnungen, Historie).
 - **Dashboard und REST-Schnittstelle.** Dieselben Rechte wie im Spiel, kein zweites
   Rechtesystem.
+- **Dateizugriff per SFTP.** In das Verzeichnis eines statischen Servers und in die
+  Templates der Gruppen - mit WinSCP, FileZilla oder jedem anderen SFTP-Programm. Wer
+  wohin darf, sagen auch hier die Rechte aus dem Spiel.
 
 ## Aufbau
 
@@ -39,6 +42,7 @@ Java 25 · Gradle 9 · gRPC über TLS · PostgreSQL 17 · Velocity 4.2 · Paper 
 common/vibecloud-protocol    .proto-Dateien und generierte gRPC-Stubs
 common/vibecloud-common      Zeit, Nachrichten-Bundles, TLS-Hilfen
 common/vibecloud-api         Rechte-Auswertung, Server-Modelle, Events, Outbox
+common/vibecloud-sftp        Der SFTP-Zugang, den Master und Wrapper beide anbieten
 master/vibecloud-master      Der Master: gRPC-Server, DB, Scheduler, Konsole, REST
 wrapper/vibecloud-wrapper    Läuft auf jedem Root, startet und überwacht die Prozesse
 platform/vibecloud-velocity  Proxy-Plugin (Login-Gate, Backend-Registrierung, Befehle)
@@ -59,6 +63,10 @@ protocol + common  ->  api  ->  { master, wrapper, platform/*, module-api }  -> 
 
 Ein Modul sieht `module-api`, `vibecloud-api`, `common` und `protocol` — niemals
 Master-Interna. Das ist keine Konvention, sondern wird vom ClassLoader durchgesetzt.
+
+`vibecloud-sftp` steht daneben: Es hängt von nichts im Projekt ab, und nur Master und
+Wrapper hängen davon ab. In `vibecloud-api` gehört es nicht — dort hängen die
+Plattform-Plugins dran, und ein SSH-Server hat in einem Paper-Plugin nichts verloren.
 
 ## Voraussetzungen
 
@@ -128,14 +136,88 @@ der Minecraft-UUID. Es gibt keine Registrierung, und es gibt kein zweites Rechte
 Wer `vibecloud.command.server.stop` im Spiel nicht hat, darf es im Dashboard auch nicht.
 Fällt `vibecloud.dashboard.login` weg, verschwindet der Zugang von selbst.
 
-Seiten: Übersicht, Server (mit Live-Log), Gruppen, Nodes, Spieler, Ränge, Sprachen,
-Module. Einzelne Rechte hängen als Dialog an einem Rang oder einem Spieler — samt
-`perm check`, das nicht nur ja oder nein sagt, sondern welche Regel entschieden hat.
 Ausgeliefert wird das gebaute Dashboard von Javalin selbst, aus `master/dashboard/`.
+
+| Seite | Was man dort tut |
+|---|---|
+| **Übersicht** | Zahlen, laufende Server, wer online ist |
+| **Server** | Starten, stoppen, hart beenden. Je Server das Live-Log — und darunter ein Eingabefeld für Befehle an seine Konsole |
+| **Gruppen** | Anlegen, alle Felder in einem Formular bearbeiten, einzeln in Wartung setzen |
+| **Nodes** | Anlegen, sperren, Token erneuern |
+| **Spieler** | Suchen, Rang setzen (auch auf Zeit), einzelne Rechte, auf einen Server schicken |
+| **Ränge** | Anlegen, bearbeiten, Vererbung, einzelne Rechte samt `perm check` |
+| **Sprachen** | Sprachen anlegen und übersetzen — die Texte der Cloud und die jedes Moduls |
+| **Dateien** | Der eigene SFTP-Zugang: Verbindungsdaten je Server und Template, Passwort erzeugen, in WinSCP öffnen |
+| **Module** | Die `config.json` eines Moduls bearbeiten |
+| **Einstellungen** | Die änderbaren Felder der `config.json` des Masters |
+
+Unten in der Seitenleiste sitzt der Schalter für den **Wartungsmodus** des ganzen
+Netzwerks — von jeder Seite aus zu sehen und zu schalten, sofern man das Recht dazu hat.
+
+Ein paar Dinge, die man wissen sollte:
+
+- **`perm check` sagt nicht nur ja oder nein**, sondern welche Regel entschieden hat und
+  welche überstimmt wurden. Dort steht meist der Denkfehler.
+- **Befehle an eine Serverkonsole brauchen ein eigenes Recht**
+  (`vibecloud.command.screen.send`). Mitlesen (`vibecloud.command.screen`) deckt es
+  bewusst nicht ab: In der Konsole eines Gameservers gibt es `op`.
+- **Eigene Modul-Texte liegen in `modules/<id>/messages/<sprache>.yml`**, und dort steht
+  nur, was vom Text im Modul-JAR abweicht. Alles andere folgt weiter den Updates des Moduls.
+- **Einstellungen wirken nach einem Neustart des Masters.** Nicht änderbar sind die
+  Felder, mit denen man sich selbst aussperren könnte (Datenbank, gRPC-Adresse und -Port,
+  HTTP) — die bleiben in der Datei. In der Konsole gibt es dasselbe als `cloud config`.
+- **Wartung gibt es global und je Gruppe**, nicht je Server. Die Server einer Gruppe sind
+  austauschbar; einen davon zu sperren hieße nur, dass der Proxy den nächsten nimmt.
 
 Die REST-Schnittstelle ist **standardmäßig aus** (`http.enabled` in der `config.json`).
 Ein offener Port mit Schreibzugriff auf das Netzwerk soll eine Entscheidung sein, kein
 Nebeneffekt.
+
+## SFTP
+
+Dateien liegen an zwei Orten, und entsprechend gibt es zwei SFTP-Zugänge — mit demselben
+Zugang und demselben Passwort, nur unter verschiedenen Adressen:
+
+| | Statischer Server | Template einer Gruppe |
+|---|---|---|
+| **Was** | Das Verzeichnis des Servers: Welt, Plugin-Daten | Die Vorlage, aus der jeder Server der Gruppe entsteht |
+| **Wo** | Auf dem Node (Wrapper) | Auf dem Master |
+| **Einschalten** | `"sftp": { "enabled": true }` in der `wrapper.json` | `"sftp": { "enabled": true }` in der `config.json` |
+| **Port** | 2222 | 2223 |
+| **Benutzername** | `<spieler>.<server>` | `<spieler>.<gruppe>` |
+| **Recht** | `vibecloud.sftp.<server>` | `vibecloud.sftp.template.<gruppe>` |
+
+Beides ist **standardmäßig aus**. `vibecloud.sftp.*` deckt alles ab.
+
+```
+sftp create <spieler>      Zugang anlegen - das Passwort wird einmal angezeigt
+sftp password <spieler>    neues Passwort, das alte gilt sofort nicht mehr
+sftp remove <spieler>
+sftp list
+sftp servers               wohin man sich verbindet
+```
+
+Im Dashboard erzeugt sich jeder sein Passwort selbst (Seite „Dateien") und sieht dort
+Adresse, Port, Benutzername und den Fingerprint des Host-Schlüssels, nach dem das
+SFTP-Programm beim ersten Verbinden fragt.
+
+**Einen dynamischen Server bearbeitet man nicht — man bearbeitet sein Template.** Sein
+Verzeichnis entsteht bei jedem Start neu und ist nach dem Stopp weg. Eine Änderung am
+Template wirkt auf jeden neu gestarteten Server der Gruppe; laufende behalten ihre Dateien.
+
+Das gilt auch für statische Server: Template-Dateien werden bei **jedem** Start über das
+Serververzeichnis gelegt. Wer dort eine `server.properties` ändert, die auch im Template
+liegt, hat nach dem nächsten Start wieder die aus dem Template. Bestand hat, was das
+Template nicht kennt — Welten, Plugin-Daten, eigene Plugins.
+
+> **Das SFTP-Recht ist ein Recht für Administratoren.** Wer Dateien hochladen darf, kann
+> ein Plugin hochladen, und das läuft beim nächsten Start als Code auf dem Node. Die
+> Sitzung ist in ihr Verzeichnis eingesperrt; das hält Versehen ab, keinen Angreifer mit
+> diesem Recht.
+
+Das SFTP-Passwort ist ein eigenes und nicht das des Dashboards: Es geht bei der Anmeldung
+im Klartext durch den Wrapper. Der Master erzeugt es, niemand wählt eines. Angeboten wird
+nur SFTP — keine Shell, keine Befehle, keine Port-Weiterleitung.
 
 ## Konfiguration und Geheimnisse
 
@@ -143,11 +225,12 @@ Nichts davon gehört ins Repo, und nichts davon ist im Repo:
 
 | Datei | Was drinsteht |
 |---|---|
-| `config.json` | Master: Datenbank, Ports, HTTP |
-| `wrapper.json` | Wrapper: Node-Token und Zertifikat-Fingerprint |
+| `config.json` | Master: Datenbank, Ports, HTTP, SFTP |
+| `wrapper.json` | Wrapper: Node-Token, Zertifikat-Fingerprint, SFTP |
 | `tls/master-key.pem` | Privater Schlüssel des Masters |
 | `secrets/jwt.key` | Signiert die Dashboard-Token |
 | `secrets/forwarding.secret` | Gemeinsames Geheimnis Proxy ↔ Gameserver |
+| `secrets/sftp-host.key` | Host-Schlüssel des SFTP-Zugangs, je einer bei Master und Wrapper |
 
 Zeitangaben werden durchgehend in UTC gespeichert und erst bei der Anzeige umgerechnet.
 
@@ -182,6 +265,21 @@ der letzte Beweis.
   nur durch Tests abgedeckt; im Betrieb gibt es bisher genau ein Modul.
 - **Das Dashboard am Telefon.** Geprüft am Breitbild. Die Schublade der Seitenleiste unter
   1024 px hat nie jemand gesehen.
+- **SFTP unter Linux und von außen.** Durchgespielt ist es unter Windows auf einem
+  Rechner, mit dem OpenSSH-Client: hochladen, holen, löschen, falsches Passwort, fehlendes
+  Recht, Server eines anderen Nodes. Nicht geprüft sind ein Linux-Root, der Weg durch eine
+  echte Firewall und Programme wie WinSCP oder FileZilla. Auch der Knopf „In WinSCP öffnen"
+  ist nie geklickt worden — ob Windows die `sftp://`-Adresse an WinSCP übergibt, hängt an
+  dessen Installation (Einstellungen → Integration).
+- **Befehle an eine Serverkonsole aus dem Dashboard.** Geprüft gegen einen
+  Stellvertreter-Server, den die Cloud aus einem Template gestartet hat — der Befehl stand
+  danach in seinem Log. Ein echter Paper-Server war nicht dabei, und das Eingabefeld selbst
+  hat im Browser noch niemand gesehen.
+- **Was ein Proxy aus dem Wartungsmodus macht.** Der Schalter im Dashboard speichert,
+  protokolliert und meldet an die Proxys — beim Prüfen war aber keiner verbunden. Dasselbe
+  gilt für die Wartung einer einzelnen Gruppe.
+- **Rang-Dialog, Übersetzungs-Seite und Einstellungen im Browser.** Tests grün, Endpunkte
+  antworten — angemeldet durchgeklickt hat sie niemand.
 
 ### Bekannter Befund
 

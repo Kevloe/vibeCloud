@@ -4,6 +4,7 @@ import com.google.gson.Gson;
 import com.google.gson.JsonSyntaxException;
 import de.kevloe.vibecloud.api.server.ServerGroup;
 import de.kevloe.vibecloud.api.server.ServerPlatformType;
+import de.kevloe.vibecloud.common.Times;
 import de.kevloe.vibecloud.master.audit.AuditLog;
 import de.kevloe.vibecloud.master.module.ModuleManager;
 import de.kevloe.vibecloud.master.node.NodeRepository;
@@ -11,6 +12,7 @@ import de.kevloe.vibecloud.master.permission.PermissionService;
 import de.kevloe.vibecloud.master.permission.RankRepository;
 import de.kevloe.vibecloud.master.server.ServerGroupRepository;
 import de.kevloe.vibecloud.master.server.ServerRegistry;
+import de.kevloe.vibecloud.master.settings.MaintenanceSwitch;
 import io.javalin.config.RoutesConfig;
 import io.javalin.http.Context;
 import io.javalin.http.HttpStatus;
@@ -21,10 +23,13 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * Anlegen und Aendern ueber HTTP (PLAN.md Abschnitt 12).
@@ -53,10 +58,13 @@ final class AdminRoutes {
     private final ModuleManager modules;
     private final AuditLog audit;
     private final Path modulesDirectory;
+    private final MaintenanceSwitch maintenance;
 
     AdminRoutes(ApiAuth auth, ServerGroupRepository groups, ServerRegistry servers,
                 NodeRepository nodes, RankRepository ranks, PermissionService permissions,
-                ModuleManager modules, AuditLog audit, Path modulesDirectory) {
+                ModuleManager modules, AuditLog audit, Path modulesDirectory,
+                MaintenanceSwitch maintenance) {
+        this.maintenance = maintenance;
         this.auth = auth;
         this.groups = groups;
         this.servers = servers;
@@ -87,6 +95,9 @@ final class AdminRoutes {
                 .delete("/api/v1/ranks/{id}", this::deleteRank)
                 .post("/api/v1/ranks/{id}/inherit", this::addInheritance)
                 .delete("/api/v1/ranks/{id}/inherit/{parent}", this::removeInheritance)
+                // Rang eines Spielers
+                .put("/api/v1/players/{uuid}/rank", this::setPlayerRank)
+                .delete("/api/v1/players/{uuid}/rank", this::resetPlayerRank)
                 // Modul-Konfiguration
                 .get("/api/v1/modules/{id}/config", this::moduleConfig)
                 .put("/api/v1/modules/{id}/config", this::saveModuleConfig);
@@ -160,7 +171,13 @@ final class AdminRoutes {
             return;
         }
         try {
-            if (!groups.updateField(name, field, value)) {
+            // Die Wartung ist mehr als ein Feld: Die Proxys muessen davon erfahren. Ohne
+            // diesen Umweg stuende der Wert in der Datenbank, und weiter wuerden Spieler
+            // dorthin geschickt.
+            boolean found = field.equalsIgnoreCase("maintenance")
+                    ? maintenance.setGroup(name, parseBoolean(value), actor(context)) >= 0
+                    : groups.updateField(name, field, value);
+            if (!found) {
                 fail(context, HttpStatus.NOT_FOUND, "Unbekannte Gruppe: " + name);
                 return;
             }
@@ -170,9 +187,12 @@ final class AdminRoutes {
         }
         audit.record(actor(context), "group.edited", name,
                 Map.of("field", field, "value", value));
-        // Wie in der Konsole: Die Aenderung wirkt erst auf neu gestartete Server.
+        // Wie in der Konsole: Die Aenderung wirkt erst auf neu gestartete Server - nur die
+        // Wartung nicht, die gilt sofort.
         context.json(Map.of("name", name, "field", field, "value", value,
-                "note", "Wirkt auf neu gestartete Server"));
+                "note", field.equalsIgnoreCase("maintenance")
+                        ? "Wirkt sofort"
+                        : "Wirkt auf neu gestartete Server"));
     }
 
     private void deleteGroup(Context context) {
@@ -411,6 +431,85 @@ final class AdminRoutes {
         context.json(Map.of("id", id, "removed", parent));
     }
 
+    // ---------------------------------------------------------------- Rang eines Spielers
+
+    /**
+     * {@code rank set <spieler> <rang> [dauer]} ueber HTTP.
+     *
+     * <p>Derselbe Aufruf wie in der Konsole - {@link PermissionService#setRank} schreibt
+     * den Verlauf, verwirft die Rechte und loest das Event aus, an dem auch der
+     * Dashboard-Zugang haengt. Wer sich hier selbst einen Rang ohne
+     * {@code vibecloud.dashboard.login} gibt, ist deshalb danach abgemeldet.
+     */
+    private void setPlayerRank(Context context) {
+        if (!auth.require(context, WRITE, "vibecloud.command.rank.set")) {
+            return;
+        }
+        Optional<UUID> uuid = uuid(context);
+        if (uuid.isEmpty()) {
+            return;
+        }
+        Map<?, ?> body = body(context);
+        String rank = text(body, "rank");
+        if (rank == null) {
+            fail(context, HttpStatus.BAD_REQUEST, "Feld 'rank' ist Pflicht");
+            return;
+        }
+        rank = rank.trim().toLowerCase(Locale.ROOT);
+        if (ranks.find(rank).isEmpty()) {
+            fail(context, HttpStatus.BAD_REQUEST, "Rang " + rank + " existiert nicht");
+            return;
+        }
+
+        // Dieselbe Schreibweise wie ueberall: 30d, 12h, 90m. Leer heisst dauerhaft.
+        String given = text(body, "duration");
+        Duration duration = null;
+        if (given != null) {
+            duration = Times.parseDuration(given.trim());
+            if (duration == null) {
+                fail(context, HttpStatus.BAD_REQUEST,
+                        "Dauer nicht verstanden: " + given + " (erlaubt: 30d, 12h, 90m)");
+                return;
+            }
+        }
+
+        try {
+            permissions.setRank(uuid.get(), rank, duration, actor(context), null);
+        } catch (IllegalArgumentException exception) {
+            fail(context, HttpStatus.NOT_FOUND, exception.getMessage());
+            return;
+        }
+        // Protokolliert wird im Dienst - sonst stuende jede Aenderung zweimal im Verlauf.
+        Map<String, Object> answer = new LinkedHashMap<>();
+        answer.put("uuid", uuid.get().toString());
+        answer.put("rank", rank);
+        answer.put("duration", given == null ? "" : given.trim());
+        answer.put("note", "Wirkt sofort - die Plugins laden die Rechte neu, ohne Relog");
+        context.json(answer);
+    }
+
+    /** {@code rank reset <spieler>} - zurueck auf den Default-Rang. */
+    private void resetPlayerRank(Context context) {
+        if (!auth.require(context, WRITE, "vibecloud.command.rank.reset")) {
+            return;
+        }
+        Optional<UUID> uuid = uuid(context);
+        if (uuid.isEmpty()) {
+            return;
+        }
+        try {
+            permissions.resetRank(uuid.get(), actor(context));
+        } catch (IllegalArgumentException exception) {
+            fail(context, HttpStatus.NOT_FOUND, exception.getMessage());
+            return;
+        } catch (IllegalStateException exception) {
+            // Kein Default-Rang - dann gibt es nichts, worauf zurueckgesetzt werden koennte.
+            fail(context, HttpStatus.CONFLICT, exception.getMessage());
+            return;
+        }
+        context.json(Map.of("uuid", uuid.get().toString(), "reset", true));
+    }
+
     // ---------------------------------------------------------------- Modul-Konfiguration
 
     /**
@@ -492,6 +591,26 @@ final class AdminRoutes {
 
     private static String actor(Context context) {
         return ApiAuth.of(context).map(ApiAuth.Principal::name).orElse("API");
+    }
+
+    /** Nur {@code true} und {@code false} - "ja" waere sonst stillschweigend false. */
+    private static boolean parseBoolean(String value) {
+        return switch (value.trim().toLowerCase(Locale.ROOT)) {
+            case "true" -> true;
+            case "false" -> false;
+            default -> throw new IllegalArgumentException(
+                    "maintenance muss true oder false sein, nicht: " + value);
+        };
+    }
+
+    /** Liest die UUID aus dem Pfad und antwortet selbst, wenn sie nicht stimmt. */
+    private static Optional<UUID> uuid(Context context) {
+        try {
+            return Optional.of(UUID.fromString(context.pathParam("uuid")));
+        } catch (IllegalArgumentException exception) {
+            fail(context, HttpStatus.BAD_REQUEST, "Keine gueltige UUID");
+            return Optional.empty();
+        }
     }
 
     private static Map<?, ?> body(Context context) {

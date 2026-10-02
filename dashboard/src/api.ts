@@ -279,6 +279,89 @@ export type LocaleFile = {
   default: boolean;
   entries: Record<string, string>;
   defaults: Record<string, string>;
+  /**
+   * Nur bei den Texten eines Moduls: was das JAR selbst mitbringt. Daran ist zu sehen,
+   * welcher Text ein eigener ist - und worauf er sich zuruecksetzen laesst.
+   */
+  bundled?: Record<string, string>;
+};
+
+/** Die Texte eines Moduls in der Uebersicht - je Sprache der Cloud. */
+export type ModuleLocales = {
+  id: string;
+  locales: Array<LocaleSummary & { overridden: number }>;
+};
+
+/**
+ * Ein statischer Server, in dessen Verzeichnis der eigene SFTP-Zugang fuehrt.
+ *
+ * `host`, `hostKey` und `url` fehlen, solange es nichts zu verbinden gibt - der Node ist
+ * nicht da (`nodeConnected`) oder bietet kein SFTP an (`port` ist 0).
+ */
+export type SftpServer = {
+  server: string;
+  group: string;
+  node: string;
+  nodeConnected: boolean;
+  port: number;
+  /** `<zugang>.<server>` - so meldet man sich an. */
+  username: string;
+  host?: string;
+  /** Fingerprint des Host-Schluessels, wie der Client ihn beim ersten Verbinden zeigt. */
+  hostKey?: string;
+  /** `sftp://...` ohne Passwort - oeffnet das Programm, das dafuer eingetragen ist. */
+  url?: string;
+};
+
+/**
+ * Eine Gruppe, deren Template ueber SFTP bearbeitet werden darf.
+ *
+ * Ohne Adresse: Templates liegen auf dem Master, und dessen Adresse ist die, unter der
+ * das Dashboard gerade geladen wurde.
+ */
+export type SftpTemplate = {
+  group: string;
+  /** Der Ordner unter templates/ - meist wie die Gruppe. */
+  template: string;
+  platform: string;
+  static: boolean;
+  /** `<zugang>.<gruppe>` - so meldet man sich am Master an. */
+  username: string;
+};
+
+export type SftpOverview = {
+  username: string;
+  hasAccount: boolean;
+  lastLogin: string;
+  lastServer: string;
+  servers: SftpServer[];
+  templates: SftpTemplate[];
+  /** SFTP-Port des Masters fuer die Templates. 0 heisst: dort ausgeschaltet. */
+  templatePort: number;
+  templateHostKey: string;
+};
+
+/** Der globale Wartungsmodus und die Gruppen, die einzeln in Wartung sind. */
+export type Maintenance = {
+  active: boolean;
+  groups: string[];
+  /** Ob der Angemeldete ein- bzw. ausschalten duerfte - der Master prueft es trotzdem. */
+  mayEnable: boolean;
+  mayDisable: boolean;
+};
+
+/** Ein Feld der config.json: was in der Datei steht und womit der Master laeuft. */
+export type ConfigField = {
+  name: string;
+  value: string;
+  running: string;
+  range: string;
+};
+
+export type CloudConfig = {
+  fields: ConfigField[];
+  /** Felder, die sich nur in der Datei aendern lassen - mit dem laufenden Wert. */
+  locked: Record<string, string>;
 };
 
 /**

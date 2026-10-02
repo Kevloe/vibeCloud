@@ -166,6 +166,17 @@ public final class ServerGroupRepository {
     /**
      * Setzt ein einzelnes Feld. Absichtlich mit Whitelist statt freiem Spaltennamen -
      * sonst waere das eine SQL-Injection ueber den Konsolen-Befehl.
+     *
+     * <p><b>Gespeichert wird nur, was sich danach noch lesen laesst.</b> Die Regeln einer
+     * Gruppe stehen in {@link ServerGroup} (mindestens 128 MB, {@code max_online} nicht
+     * unter {@code min_online}, {@code %id%} im Namensmuster) - und die Datenbank kennt sie
+     * nicht. Ohne die Gegenprobe hier nahm sie {@code memory 64} an, danach warf jedes
+     * {@code findAll()}, und der Scheduler startete fuer <b>keine</b> Gruppe mehr einen
+     * Server. Ein Tippfehler in einem Feld legte die ganze Cloud still.
+     *
+     * @throws IllegalArgumentException bei einem unbekannten Feld oder einem Wert, mit dem
+     *                                  die Gruppe nicht mehr gueltig waere - dann ist
+     *                                  nichts geaendert
      */
     public boolean updateField(String group, String field, String value) {
         String column = switch (field.toLowerCase(Locale.ROOT)) {
@@ -195,14 +206,43 @@ public final class ServerGroupRepository {
 
         String sql = "UPDATE server_groups SET " + column + " = ?"
                      + (numeric ? "::integer" : bool ? "::boolean" : "") + " WHERE name = ?";
-        try (Connection connection = database.connection();
-             PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setString(1, value);
-            statement.setString(2, group);
-            return statement.executeUpdate() > 0;
+        try (Connection connection = database.connection()) {
+            boolean autoCommit = connection.getAutoCommit();
+            connection.setAutoCommit(false);
+            try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                statement.setString(1, value);
+                statement.setString(2, group);
+                if (statement.executeUpdate() == 0) {
+                    connection.rollback();
+                    return false;
+                }
+                // Die Gegenprobe: dieselbe Zeile so lesen, wie es danach jeder tut. Wirft
+                // der Konstruktor, wird die Aenderung zurueckgenommen.
+                requireReadable(connection, group);
+                connection.commit();
+                return true;
+            } catch (SQLException | RuntimeException exception) {
+                connection.rollback();
+                throw exception;
+            } finally {
+                connection.setAutoCommit(autoCommit);
+            }
         } catch (SQLException exception) {
             throw new IllegalArgumentException(
                     "Wert '" + value + "' passt nicht zu " + column + ": " + exception.getMessage());
+        }
+    }
+
+    private static void requireReadable(Connection connection, String group)
+            throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT * FROM server_groups WHERE name = ?")) {
+            statement.setString(1, group);
+            try (ResultSet result = statement.executeQuery()) {
+                if (result.next()) {
+                    read(result);
+                }
+            }
         }
     }
 

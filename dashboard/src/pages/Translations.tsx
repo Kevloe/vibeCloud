@@ -4,6 +4,7 @@ import {
   request,
   type LocaleFile,
   type LocaleSummary,
+  type ModuleLocales,
 } from "../api";
 import { Button } from "../ui/Button";
 import { Field, TextInput } from "../ui/Form";
@@ -12,28 +13,44 @@ import { Badge, Card, Cell, Empty, PageHeader, Row, Table } from "../ui/Layout";
 import { ConfirmModal, Modal } from "../ui/Modal";
 import { useToast } from "../ui/Toast";
 
+/** Was gerade uebersetzt wird: die Texte der Cloud oder die eines Moduls. */
+type Editing = {
+  /** Kennung des Moduls - {@code null} fuer die Texte der Cloud. */
+  module: string | null;
+  locale: string;
+};
+
 /**
  * Sprachen anlegen und uebersetzen (PLAN.md Abschnitt 11a).
  *
- * Gearbeitet wird auf den Dateien in {@code messages/}. Nach jedem Speichern liest der
- * Master neu ein und verteilt an alle Plugins - eine Textkorrektur wirkt sofort, ohne
- * dass ein Server neu startet.
+ * Zwei Arten von Texten: die der Cloud aus {@code messages/} und die der Module. Eine
+ * Sprache gibt es, wenn die Cloud ihre Datei hat - die Module haengen sich daran. Nach
+ * jedem Speichern liest der Master neu ein und verteilt an alle Plugins; eine
+ * Textkorrektur wirkt sofort, ohne dass ein Server neu startet.
+ *
+ * Uebersetzt wird auf einer eigenen Seite und nicht in einem Dialog: Es sind ueber hundert
+ * Zeilen, und in einem Dialog haette man davon nur einen Ausschnitt gesehen, der in sich
+ * selbst scrollt.
  */
 export function Translations() {
   const toast = useToast();
   const [locales, setLocales] = useState<LocaleSummary[]>([]);
+  const [modules, setModules] = useState<ModuleLocales[]>([]);
   const [busy, setBusy] = useState(false);
 
-  const [editing, setEditing] = useState<string | null>(null);
+  const [editing, setEditing] = useState<Editing | null>(null);
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<LocaleSummary | null>(null);
 
   async function load() {
     try {
-      const answer = await request<{ default: string; locales: LocaleSummary[] }>(
-        "/api/v1/messages",
-      );
+      const answer = await request<{
+        default: string;
+        locales: LocaleSummary[];
+        modules: ModuleLocales[];
+      }>("/api/v1/messages");
       setLocales(answer.locales);
+      setModules(answer.modules ?? []);
     } catch (exception) {
       toast.error(
         exception instanceof ApiError ? exception.message : "Laden fehlgeschlagen",
@@ -78,6 +95,22 @@ export function Translations() {
     }
   }
 
+  if (editing) {
+    return (
+      <LocaleEditor
+        // Der Schluessel sorgt dafuer, dass ein Wechsel der Sprache mit leerem Entwurf
+        // beginnt und nicht mit dem der vorigen.
+        key={`${editing.module ?? ""}/${editing.locale}`}
+        editing={editing}
+        onBack={() => {
+          setEditing(null);
+          // Die Zahlen in der Uebersicht (fehlend, eigene) haben sich geaendert.
+          void load();
+        }}
+      />
+    );
+  }
+
   return (
     <div>
       <PageHeader
@@ -95,70 +128,95 @@ export function Translations() {
         }
       />
 
-      <Card padded={false}>
-        {locales.length === 0 ? (
-          <Empty
-            icon="language"
-            title="Noch keine Sprachdatei"
-            hint="Die Standardsprache legt der Master beim ersten Start selbst an."
-          />
-        ) : (
-          <Table columns={["Sprache", "Texte", "Fehlend", ""]}>
-            {locales.map((locale) => (
-              <Row key={locale.locale} highlighted={locale.locale === editing}>
-                <Cell>
-                  <span className="inline-flex items-center gap-2 font-medium text-text">
-                    {locale.locale}
-                    {locale.default && <Badge tone="brand">Standard</Badge>}
-                  </span>
-                </Cell>
-                <Cell className="tabular-nums">{locale.keys}</Cell>
-                <Cell>
-                  {locale.missing === 0 ? (
-                    <Badge tone="ok">vollständig</Badge>
-                  ) : (
-                    <Badge tone="warn">
-                      {locale.missing} fehlen – es greift Deutsch
-                    </Badge>
-                  )}
-                </Cell>
-                <Cell align="right">
-                  <Button
-                    size="sm"
-                    icon="edit"
-                    onClick={() => setEditing(locale.locale)}
-                  >
-                    Übersetzen
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="danger"
-                    icon="trash"
-                    className="ml-2"
-                    disabled={locale.default}
-                    title={
-                      locale.default
-                        ? "Ohne die Standardsprache lädt gar nichts mehr"
-                        : undefined
-                    }
-                    onClick={() => setDeleting(locale)}
-                  >
-                    Löschen
-                  </Button>
-                </Cell>
-              </Row>
-            ))}
-          </Table>
-        )}
-      </Card>
+      <div className="space-y-6">
+        <Card title="Texte der Cloud" padded={false}>
+          {locales.length === 0 ? (
+            <Empty
+              icon="language"
+              title="Noch keine Sprachdatei"
+              hint="Die Standardsprache legt der Master beim ersten Start selbst an."
+            />
+          ) : (
+            <Table columns={["Sprache", "Texte", "Fehlend", ""]}>
+              {locales.map((locale) => (
+                <Row key={locale.locale}>
+                  <Cell>
+                    <LocaleName locale={locale} />
+                  </Cell>
+                  <Cell className="tabular-nums">{locale.keys}</Cell>
+                  <Cell>
+                    <Missing count={locale.missing} />
+                  </Cell>
+                  <Cell align="right">
+                    <Button
+                      size="sm"
+                      icon="edit"
+                      onClick={() => setEditing({ module: null, locale: locale.locale })}
+                    >
+                      Übersetzen
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      icon="trash"
+                      className="ml-2"
+                      disabled={locale.default}
+                      title={
+                        locale.default
+                          ? "Ohne die Standardsprache lädt gar nichts mehr"
+                          : undefined
+                      }
+                      onClick={() => setDeleting(locale)}
+                    >
+                      Löschen
+                    </Button>
+                  </Cell>
+                </Row>
+              ))}
+            </Table>
+          )}
+        </Card>
 
-      {editing && (
-        <EditLocale
-          locale={editing}
-          onClose={() => setEditing(null)}
-          onSaved={load}
-        />
-      )}
+        {/*
+          Je Modul ein Kasten. Die Sprachen sind dieselben wie oben - angelegt und
+          geloescht wird eine Sprache nur dort, nicht je Modul.
+        */}
+        {modules.map((module) => (
+          <Card key={module.id} title={`Modul ${module.id}`} padded={false}>
+            <Table columns={["Sprache", "Texte", "Fehlend", "Eigene", ""]}>
+              {module.locales.map((locale) => (
+                <Row key={locale.locale}>
+                  <Cell>
+                    <LocaleName locale={locale} />
+                  </Cell>
+                  <Cell className="tabular-nums">{locale.keys}</Cell>
+                  <Cell>
+                    <Missing count={locale.missing} />
+                  </Cell>
+                  <Cell className="tabular-nums">
+                    {locale.overridden === 0 ? (
+                      <span className="text-text-faint">keine</span>
+                    ) : (
+                      locale.overridden
+                    )}
+                  </Cell>
+                  <Cell align="right">
+                    <Button
+                      size="sm"
+                      icon="edit"
+                      onClick={() =>
+                        setEditing({ module: module.id, locale: locale.locale })
+                      }
+                    >
+                      Übersetzen
+                    </Button>
+                  </Cell>
+                </Row>
+              ))}
+            </Table>
+          </Card>
+        ))}
+      </div>
 
       <CreateLocale
         open={creating}
@@ -172,7 +230,9 @@ export function Translations() {
         title={`Sprache ${deleting?.locale} löschen?`}
         description={
           "Die Datei wird gelöscht. Spieler mit dieser Sprache bekommen danach die " +
-          "Standardsprache - ihre Einstellung bleibt, es gibt nur keine Texte mehr dazu."
+          "Standardsprache - ihre Einstellung bleibt, es gibt nur keine Texte mehr dazu. " +
+          "Eigene Texte zu Modulen in dieser Sprache bleiben liegen und gelten wieder, " +
+          "wenn die Sprache neu angelegt wird."
         }
         confirmLabel="Löschen"
         busy={busy}
@@ -183,59 +243,108 @@ export function Translations() {
   );
 }
 
+function LocaleName({ locale }: { locale: LocaleSummary }) {
+  return (
+    <span className="inline-flex items-center gap-2 font-medium text-text">
+      {locale.locale}
+      {locale.default && <Badge tone="brand">Standard</Badge>}
+    </span>
+  );
+}
+
+function Missing({ count }: { count: number }) {
+  return count === 0 ? (
+    <Badge tone="ok">vollständig</Badge>
+  ) : (
+    <Badge tone="warn">{count} fehlen – es greift Deutsch</Badge>
+  );
+}
+
 /**
- * Der Uebersetzungs-Editor.
+ * Die Uebersetzungs-Seite.
  *
- * Links der Schluessel und der deutsche Text, rechts das Feld - ohne den Ausgangstext
+ * Links der Schluessel und der Ausgangstext, rechts das Feld - ohne den Ausgangstext
  * uebersetzt niemand etwas. Leer gelassene Felder werden <b>nicht</b> gespeichert: Dann
  * greift die Standardsprache, und im Spiel steht ein deutscher Satz statt einer leeren
  * Zeile.
+ *
+ * Bei einem Modul kommt ein Drittes dazu: der Text aus dem JAR. Gespeichert wird dort nur,
+ * was davon abweicht - alles andere soll weiter den Updates des Moduls folgen.
  */
-function EditLocale({
-  locale,
-  onClose,
-  onSaved,
-}: {
-  locale: string;
-  onClose: () => void;
-  onSaved: () => Promise<void>;
-}) {
+function LocaleEditor({ editing, onBack }: { editing: Editing; onBack: () => void }) {
   const toast = useToast();
+  const { module, locale } = editing;
+  const url = module
+    ? `/api/v1/messages/modules/${module}/${locale}`
+    : `/api/v1/messages/${locale}`;
+
   const [file, setFile] = useState<LocaleFile | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [filter, setFilter] = useState("");
   const [onlyMissing, setOnlyMissing] = useState(false);
+  const [onlyOwn, setOnlyOwn] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+
+  async function load() {
+    try {
+      const loaded = await request<LocaleFile>(url);
+      setFile(loaded);
+      setDraft(loaded.entries);
+    } catch (exception) {
+      toast.error(
+        exception instanceof ApiError ? exception.message : "Laden fehlgeschlagen",
+      );
+    }
+  }
 
   useEffect(() => {
-    request<LocaleFile>(`/api/v1/messages/${locale}`)
-      .then((loaded) => {
-        setFile(loaded);
-        setDraft(loaded.entries);
-      })
-      .catch((exception) =>
-        toast.error(
-          exception instanceof ApiError ? exception.message : "Laden fehlgeschlagen",
-        ),
-      );
-  }, [locale]);
+    void load();
+  }, [url]);
+
+  const title = `${locale} übersetzen`;
+  const source = module ? `Modul ${module}` : "Texte der Cloud";
 
   if (!file) {
     return (
-      <Modal open title={`${locale} übersetzen`} onClose={onClose}>
+      <div>
+        <PageHeader
+          title={title}
+          subtitle={source}
+          actions={
+            <Button icon="back" size="sm" onClick={onBack}>
+              Zurück
+            </Button>
+          }
+        />
         <p className="text-sm text-text-muted">Lade ...</p>
-      </Modal>
+      </div>
     );
   }
+
+  const bundled = file.bundled ?? {};
 
   // Alle Schluessel der Standardsprache plus die, die es nur hier gibt - sonst fiele ein
   // eigener Schluessel beim naechsten Speichern still unter den Tisch.
   const keys = Array.from(
-    new Set([...Object.keys(file.defaults), ...Object.keys(file.entries)]),
+    new Set([
+      ...Object.keys(file.defaults),
+      ...Object.keys(file.entries),
+      ...Object.keys(bundled),
+    ]),
   ).sort();
+
+  /** Ob hier ein eigener Text steht, wo das Modul einen anderen mitbringt. */
+  function isOwn(key: string): boolean {
+    const value = draft[key] ?? "";
+    return module !== null && value.trim() !== "" && value !== (bundled[key] ?? "");
+  }
 
   const shown = keys.filter((key) => {
     if (onlyMissing && (draft[key] ?? "").trim() !== "") {
+      return false;
+    }
+    if (onlyOwn && !isOwn(key)) {
       return false;
     }
     if (!filter) {
@@ -266,14 +375,14 @@ function EditLocale({
     }
 
     try {
-      const answer = await request<{ note: string }>(`/api/v1/messages/${locale}`, {
+      const answer = await request<{ note: string }>(url, {
         method: "PUT",
         body: { entries },
       });
       toast.success(answer.note);
-      // Funktionale Form, weil TypeScript die Pruefung auf null hier nicht mehr sieht.
-      setFile((previous) => (previous ? { ...previous, entries } : previous));
-      await onSaved();
+      // Neu holen statt den Entwurf zu uebernehmen: Bei einem Modul steht in einem
+      // geleerten Feld danach wieder der Text aus dem JAR.
+      await load();
     } catch (exception) {
       toast.error(
         exception instanceof ApiError ? exception.message : "Speichern fehlgeschlagen",
@@ -284,32 +393,36 @@ function EditLocale({
   }
 
   return (
-    <Modal
-      open
-      wide
-      title={`${locale} übersetzen`}
-      description={
-        file.default
-          ? "Das ist die Standardsprache - sie ist die Vorlage für alle anderen und sollte vollständig bleiben."
-          : "Leere Felder werden nicht gespeichert; dort greift die Standardsprache."
-      }
-      onClose={onClose}
-      footer={
-        <>
-          <span className="mr-auto text-xs text-text-faint">
-            {filled} von {keys.length} übersetzt
-            {changed > 0 ? ` · ${changed} geändert` : ""}
-          </span>
-          <Button variant="ghost" onClick={onClose}>
-            Schließen
+    <div>
+      <PageHeader
+        title={title}
+        subtitle={
+          <>
+            {source} ·{" "}
+            {file.default
+              ? "Das ist die Standardsprache - sie ist die Vorlage für alle anderen und sollte vollständig bleiben."
+              : "Leere Felder werden nicht gespeichert; dort greift die Standardsprache."}
+          </>
+        }
+        actions={
+          <Button
+            icon="back"
+            size="sm"
+            // Ungespeichertes geht beim Verlassen verloren - das soll eine Entscheidung
+            // sein und kein Versehen.
+            onClick={() => (changed > 0 ? setLeaving(true) : onBack())}
+          >
+            Zurück
           </Button>
-          <Button variant="primary" busy={busy} disabled={changed === 0} onClick={save}>
-            Speichern
-          </Button>
-        </>
-      }
-    >
-      <div className="mb-3 flex flex-wrap items-center gap-3">
+        }
+      />
+
+      {/*
+        Suche und Speichern bleiben beim Scrollen oben stehen: In Zeile 120 soll man nicht
+        zurueck an den Seitenanfang muessen, um zu speichern. Nur am Breitbild - auf einem
+        schmalen laege die Leiste unter dem Schalter der Navigation.
+      */}
+      <div className="z-10 mb-4 flex flex-wrap items-center gap-3 rounded-card border border-line bg-surface p-3 lg:sticky lg:top-0">
         <div className="relative min-w-56 flex-1">
           <Icon
             name="search"
@@ -324,71 +437,140 @@ function EditLocale({
           />
         </div>
         {!file.default && (
-          <label className="flex cursor-pointer items-center gap-2 text-xs text-text-muted">
-            <input
-              type="checkbox"
-              checked={onlyMissing}
-              onChange={(event) => setOnlyMissing(event.target.checked)}
-              className="size-4 accent-[var(--color-brand)]"
-            />
+          <Toggle checked={onlyMissing} onChange={setOnlyMissing}>
             nur fehlende
-          </label>
+          </Toggle>
         )}
+        {module && (
+          <Toggle checked={onlyOwn} onChange={setOnlyOwn}>
+            nur eigene
+          </Toggle>
+        )}
+        <span className="text-xs text-text-faint" aria-live="polite">
+          {filled} von {keys.length} {file.default ? "gefüllt" : "übersetzt"}
+          {changed > 0 ? ` · ${changed} geändert` : ""}
+        </span>
+        <Button variant="primary" busy={busy} disabled={changed === 0} onClick={save}>
+          Speichern
+        </Button>
       </div>
 
-      <div className="max-h-[55vh] space-y-3 overflow-y-auto pr-1">
-        {shown.map((key) => {
-          const value = draft[key] ?? "";
-          const original = file.defaults[key] ?? "";
-          const missing = value.trim() === "";
+      <Card padded={false}>
+        <ul>
+          {shown.map((key) => {
+            const value = draft[key] ?? "";
+            const missing = value.trim() === "";
+            const own = isOwn(key);
+            const hasBundled = bundled[key] !== undefined;
+            // Bei einem Modul ist in der Standardsprache der Text aus dem JAR die
+            // Vorlage - die Standardsprache selbst ist ja das, was man gerade aendert.
+            const original = file.default ? bundled[key] : file.defaults[key];
 
-          return (
-            <div key={key} className="rounded-md border border-line/70 p-3">
-              <div className="flex items-baseline justify-between gap-3">
-                <code className="console text-xs text-text">{key}</code>
-                {missing && !file.default && <Badge tone="warn">fehlt</Badge>}
-              </div>
+            return (
+              <li
+                key={key}
+                className="grid gap-x-6 gap-y-2 border-t border-line/70 px-4 py-3 first:border-t-0 lg:grid-cols-2"
+              >
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <code className="console break-all text-xs text-text">{key}</code>
+                    {missing && !file.default && <Badge tone="warn">fehlt</Badge>}
+                    {own && hasBundled && <Badge tone="brand">eigener Text</Badge>}
+                    {module && !hasBundled && file.defaults[key] === undefined && (
+                      <Badge>kennt das Modul nicht mehr</Badge>
+                    )}
+                  </div>
 
-              {/* Der Ausgangstext steht als Text daneben, nicht in einem Feld - er ist
-                  hier nicht zu aendern, sondern die Vorlage. */}
-              {!file.default && (
-                <p className="console mt-1 text-xs leading-relaxed text-text-faint">
-                  {original || "(in der Standardsprache nicht vorhanden)"}
-                </p>
-              )}
+                  {/* Der Ausgangstext steht als Text daneben, nicht in einem Feld - er
+                      ist hier nicht zu aendern, sondern die Vorlage. */}
+                  {(!file.default || module) && (
+                    <p className="console mt-1 text-xs leading-relaxed text-text-faint">
+                      {original ??
+                        (file.default
+                          ? "(bringt das Modul nicht mit)"
+                          : "(in der Standardsprache nicht vorhanden)")}
+                    </p>
+                  )}
+                </div>
 
-              {/*
-                Kein Platzhalter mit dem deutschen Text: Der steht schon darueber, und im
-                Feld saehe er aus wie ein bereits eingetragener Satz. Leer heisst leer.
-              */}
-              <TextInput
-                value={value}
-                onChange={(event) => setDraft({ ...draft, [key]: event.target.value })}
-                aria-label={key}
-                className={
-                  "console mt-2 text-xs " +
-                  (value !== (file.entries[key] ?? "") ? "border-brand" : "")
-                }
-              />
-            </div>
-          );
-        })}
+                <div className="flex items-start gap-2">
+                  {/*
+                    Kein Platzhalter mit dem Ausgangstext: Der steht schon daneben, und im
+                    Feld saehe er aus wie ein bereits eingetragener Satz. Leer heisst leer.
+                  */}
+                  <TextInput
+                    value={value}
+                    onChange={(event) => setDraft({ ...draft, [key]: event.target.value })}
+                    aria-label={key}
+                    className={
+                      "console text-xs " +
+                      (value !== (file.entries[key] ?? "") ? "border-brand" : "")
+                    }
+                  />
+                  {own && hasBundled && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      icon="refresh"
+                      className="mt-1 shrink-0"
+                      title="Wieder den Text des Moduls nehmen"
+                      onClick={() => setDraft({ ...draft, [key]: bundled[key] })}
+                    >
+                      Zurücksetzen
+                    </Button>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
 
         {shown.length === 0 && (
-          <p className="py-6 text-center text-sm text-text-muted">
-            Kein Treffer.
-          </p>
+          <p className="py-10 text-center text-sm text-text-muted">Kein Treffer.</p>
         )}
-      </div>
+      </Card>
 
-      <p className="mt-3 text-xs text-text-faint">
+      <p className="mt-4 max-w-4xl text-xs text-text-faint">
         Format ist MiniMessage (<code className="console">&lt;red&gt;Text&lt;/red&gt;</code>),
         Platzhalter sind benannt (<code className="console">&lt;spieler&gt;</code>) und
         müssen stehen bleiben. Ein Zeilenumbruch ist{" "}
-        <code className="console">&lt;newline&gt;</code>. Beim Speichern wird die Datei
-        flach neu geschrieben – eigene Kommentare darin gehen verloren.
+        <code className="console">&lt;newline&gt;</code>.{" "}
+        {module
+          ? "Gespeichert wird nur, was vom Text des Moduls abweicht – alles andere folgt weiter seinen Updates."
+          : "Beim Speichern wird die Datei flach neu geschrieben – eigene Kommentare darin gehen verloren."}
       </p>
-    </Modal>
+
+      <ConfirmModal
+        open={leaving}
+        title={`${changed} ungespeicherte ${changed === 1 ? "Änderung" : "Änderungen"} verwerfen?`}
+        description="Was du seit dem letzten Speichern eingetragen hast, ist danach weg."
+        confirmLabel="Verwerfen"
+        onConfirm={onBack}
+        onClose={() => setLeaving(false)}
+      />
+    </div>
+  );
+}
+
+function Toggle({
+  checked,
+  onChange,
+  children,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  children: string;
+}) {
+  return (
+    <label className="flex cursor-pointer items-center gap-2 text-xs text-text-muted">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+        className="size-4 accent-[var(--color-brand)]"
+      />
+      {children}
+    </label>
   );
 }
 
@@ -434,7 +616,7 @@ function CreateLocale({
     <Modal
       open={open}
       title="Neue Sprache"
-      description="Die neue Datei startet mit den Texten der Standardsprache - du ersetzt sie Zeile für Zeile."
+      description="Die neue Datei startet mit den Texten der Standardsprache - du ersetzt sie Zeile für Zeile. Die Texte der Module übersetzt du danach je Modul."
       onClose={onClose}
       footer={
         <>

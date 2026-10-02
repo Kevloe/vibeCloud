@@ -8,6 +8,7 @@ import de.kevloe.vibecloud.wrapper.config.WrapperConfig;
 import de.kevloe.vibecloud.wrapper.grpc.MasterConnection;
 import de.kevloe.vibecloud.wrapper.runtime.ProcessServerRuntime;
 import de.kevloe.vibecloud.wrapper.server.LocalServerManager;
+import de.kevloe.vibecloud.sftp.SftpGateway;
 import de.kevloe.vibecloud.wrapper.template.TemplateCache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -55,7 +56,8 @@ public final class Main {
             }
 
             try (MasterConnection connection =
-                         new MasterConnection(config, outbox, servers, cache)) {
+                         new MasterConnection(config, outbox, servers, cache);
+                 SftpGateway _ = startSftp(config, workingDirectory, servers, connection)) {
 
                 // Geht der Wrapper, gehen seine Server mit: Er ist der Besitzer der
                 // Prozesse auf diesem Node. Zurueckgelassene Prozesse wuerden ihre Ports
@@ -81,6 +83,41 @@ public final class Main {
             runtime.shutdown();
         }
         LOG.info("Wrapper beendet - die Gameserver dieses Nodes sind mit ihm gegangen");
+    }
+
+    /**
+     * Startet den SFTP-Zugang, falls eingeschaltet.
+     *
+     * <p>Vor dem Verbinden zum Master: Der Port geht mit der Anmeldung mit, damit
+     * {@code sftp servers} dort die richtige Adresse zeigt. Anmelden kann sich trotzdem
+     * erst jemand, wenn die Verbindung steht - bis dahin lautet jede Antwort nein.
+     *
+     * <p>Laesst sich der Port nicht oeffnen, laeuft der Wrapper ohne SFTP weiter. Die
+     * Gameserver sind wichtiger als der Dateizugang zu ihnen.
+     *
+     * @return {@code null}, wenn kein SFTP laeuft
+     */
+    private static SftpGateway startSftp(WrapperConfig config, Path workingDirectory,
+                                         LocalServerManager servers,
+                                         MasterConnection connection) {
+        if (!config.sftp.enabled) {
+            LOG.info("SFTP ist aus (sftp.enabled in der wrapper.json)");
+            return null;
+        }
+        SftpGateway gateway = new SftpGateway("statische Server", config.sftp.bindAddress, config.sftp.port,
+                workingDirectory.resolve("secrets").resolve("sftp-host.key"),
+                servers::staticDirectory, connection::authenticateSftp);
+        try {
+            gateway.start();
+            connection.announceSftp(gateway.port(), gateway.fingerprint());
+            return gateway;
+        } catch (java.io.IOException exception) {
+            LOG.error("SFTP konnte auf {}:{} nicht starten ({}) - der Wrapper laeuft ohne "
+                      + "weiter", config.sftp.bindAddress, config.sftp.port,
+                    exception.getMessage());
+            gateway.close();
+            return null;
+        }
     }
 
     /**

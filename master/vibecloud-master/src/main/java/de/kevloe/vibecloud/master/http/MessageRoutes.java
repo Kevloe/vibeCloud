@@ -65,6 +65,8 @@ final class MessageRoutes {
                 .get("/api/v1/messages", this::list)
                 .post("/api/v1/messages", this::create)
                 .post("/api/v1/messages/reload", this::reload)
+                .get("/api/v1/messages/modules/{module}/{locale}", this::moduleEntries)
+                .put("/api/v1/messages/modules/{module}/{locale}", this::saveModule)
                 // Nach den festen Pfaden: Sonst faengt der Platzhalter "reload" ab.
                 .get("/api/v1/messages/{locale}", this::entries)
                 .put("/api/v1/messages/{locale}", this::save)
@@ -94,11 +96,171 @@ final class MessageRoutes {
                 entry.put("missing", missing);
                 locales.add(entry);
             }
-            context.json(Map.of("default", service.defaultLocale(), "locales", locales));
+            context.json(Map.of(
+                    "default", service.defaultLocale(),
+                    "locales", locales,
+                    "modules", moduleSummaries(service)));
         } catch (IOException exception) {
             LOG.error("Sprachdateien nicht lesbar", exception);
             fail(context, HttpStatus.INTERNAL_SERVER_ERROR, "Sprachdateien nicht lesbar");
         }
+    }
+
+    /**
+     * Die Module mit eigenen Texten, je Sprache der Cloud.
+     *
+     * <p>Aufgezaehlt werden die Sprachen der Cloud und nicht die im JAR: Eine Sprache gibt
+     * es, wenn es ihre Datei in {@code messages/} gibt - auch fuer ein Modul, das sie
+     * selbst nicht mitbringt. Genau die will man dann ja uebersetzen.
+     */
+    private static List<Map<String, Object>> moduleSummaries(MessageService service)
+            throws IOException {
+        List<Map<String, Object>> modules = new java.util.ArrayList<>();
+        for (String module : service.modulesWithMessages()) {
+            Map<String, String> required;
+            try {
+                required = service.moduleEntries(module, service.defaultLocale());
+            } catch (NoSuchElementException exception) {
+                // Zwischen Aufzaehlen und Lesen entladen - dann gibt es nichts zu zeigen.
+                continue;
+            }
+
+            List<Map<String, Object>> locales = new java.util.ArrayList<>();
+            for (String locale : service.localeFiles()) {
+                if (!MessageService.isValidLocale(locale)) {
+                    // Eine Datei wie "de.alt.yml" - als Sprache der Cloud wird sie
+                    // geladen, fuer ein Modul gibt es zu ihr aber keinen Pfad.
+                    continue;
+                }
+                Map<String, String> entries = service.moduleEntries(module, locale);
+
+                Map<String, Object> entry = new LinkedHashMap<>();
+                entry.put("locale", locale);
+                entry.put("default", locale.equals(service.defaultLocale()));
+                entry.put("keys", entries.size());
+                entry.put("missing", required.keySet().stream()
+                        .filter(key -> !entries.containsKey(key))
+                        .count());
+                entry.put("overridden", service.moduleOverrides(module, locale).size());
+                locales.add(entry);
+            }
+            modules.add(Map.of("id", module, "locales", locales));
+        }
+        return modules;
+    }
+
+    /**
+     * Die Texte eines Moduls in einer Sprache.
+     *
+     * <p>Drei Saetze nebeneinander: was gilt ({@code entries}), die Standardsprache als
+     * Vorlage ({@code defaults}) und was das Modul selbst mitbringt ({@code bundled}).
+     * Ohne das Dritte saehe niemand, welcher Text ein eigener ist - und koennte ihn nicht
+     * zuruecknehmen.
+     */
+    private void moduleEntries(Context context) {
+        if (!auth.require(context, READ, PERMISSION)) {
+            return;
+        }
+        MessageService service = messages.messages();
+        String module = context.pathParam("module");
+        String locale = context.pathParam("locale");
+        try {
+            Map<String, Object> answer = new LinkedHashMap<>();
+            answer.put("module", module);
+            answer.put("locale", locale);
+            answer.put("default", locale.equals(service.defaultLocale()));
+            answer.put("entries", service.moduleEntries(module, locale));
+            answer.put("defaults", service.moduleEntries(module, service.defaultLocale()));
+            answer.put("bundled", service.moduleBundled(module, locale));
+            context.json(answer);
+        } catch (IllegalArgumentException exception) {
+            fail(context, HttpStatus.BAD_REQUEST, exception.getMessage());
+        } catch (NoSuchElementException exception) {
+            fail(context, HttpStatus.NOT_FOUND, exception.getMessage());
+        } catch (IOException exception) {
+            LOG.error("Texte von Modul {} ({}) nicht lesbar", module, locale, exception);
+            fail(context, HttpStatus.INTERNAL_SERVER_ERROR, "Datei nicht lesbar");
+        }
+    }
+
+    /** Die Texte eines Moduls ersetzen - gespeichert wird nur, was vom JAR abweicht. */
+    private void saveModule(Context context) {
+        if (!auth.require(context, WRITE, PERMISSION)) {
+            return;
+        }
+        String module = context.pathParam("module");
+        String locale = context.pathParam("locale");
+
+        Map<String, String> entries = readEntries(context);
+        if (entries == null) {
+            return;
+        }
+
+        int own;
+        try {
+            own = messages.messages().saveModuleEntries(module, locale, entries);
+        } catch (IllegalArgumentException exception) {
+            fail(context, HttpStatus.BAD_REQUEST, exception.getMessage());
+            return;
+        } catch (NoSuchElementException exception) {
+            fail(context, HttpStatus.NOT_FOUND, exception.getMessage());
+            return;
+        } catch (IllegalStateException exception) {
+            fail(context, HttpStatus.CONFLICT, exception.getMessage());
+            return;
+        } catch (IOException exception) {
+            LOG.error("Texte von Modul {} ({}) nicht schreibbar", module, locale, exception);
+            fail(context, HttpStatus.INTERNAL_SERVER_ERROR, "Datei nicht schreibbar");
+            return;
+        }
+        audit.record(actor(context), "messages.module_saved", module,
+                Map.of("locale", locale, "own", own));
+        context.json(answerAfterChange(locale, own == 0
+                ? "Gespeichert - es gelten wieder alle Texte des Moduls."
+                : own + (own == 1 ? " eigener Text" : " eigene Texte") + " gespeichert."));
+    }
+
+    /**
+     * Liest {@code entries} aus dem Rumpf und prueft jeden Eintrag.
+     *
+     * @return {@code null}, wenn die Antwort schon geschrieben wurde
+     */
+    private static Map<String, String> readEntries(Context context) {
+        Map<?, ?> body;
+        try {
+            body = GSON.fromJson(context.body(), Map.class);
+        } catch (RuntimeException exception) {
+            fail(context, HttpStatus.BAD_REQUEST, "Rumpf ist kein JSON");
+            return null;
+        }
+        Object raw = body == null ? null : body.get("entries");
+
+        if (!(raw instanceof Map<?, ?> given)) {
+            fail(context, HttpStatus.BAD_REQUEST, "Feld 'entries' ist Pflicht");
+            return null;
+        }
+
+        Map<String, String> entries = new TreeMap<>();
+        for (Map.Entry<?, ?> entry : given.entrySet()) {
+            String key = String.valueOf(entry.getKey());
+            if (!VALID_KEY.matcher(key).matches()) {
+                fail(context, HttpStatus.BAD_REQUEST, "Kein gueltiger Schluessel: " + key);
+                return null;
+            }
+            if (!(entry.getValue() instanceof String text)) {
+                fail(context, HttpStatus.BAD_REQUEST, "Der Wert von " + key + " ist kein Text");
+                return null;
+            }
+            // Ein echter Zeilenumbruch wuerde die Datei zerreissen. MiniMessage hat dafuer
+            // ein Tag, und genau das steht auch in der Standardsprache.
+            if (text.contains("\n") || text.contains("\r")) {
+                fail(context, HttpStatus.BAD_REQUEST,
+                        "Zeilenumbruch in " + key + " - bitte <newline> schreiben");
+                return null;
+            }
+            entries.put(key, text);
+        }
+        return entries;
     }
 
     /**
@@ -167,33 +329,9 @@ final class MessageRoutes {
             return;
         }
         String locale = context.pathParam("locale");
-        Map<?, ?> body = GSON.fromJson(context.body(), Map.class);
-        Object raw = body == null ? null : body.get("entries");
-
-        if (!(raw instanceof Map<?, ?> given)) {
-            fail(context, HttpStatus.BAD_REQUEST, "Feld 'entries' ist Pflicht");
+        Map<String, String> entries = readEntries(context);
+        if (entries == null) {
             return;
-        }
-
-        Map<String, String> entries = new TreeMap<>();
-        for (Map.Entry<?, ?> entry : given.entrySet()) {
-            String key = String.valueOf(entry.getKey());
-            if (!VALID_KEY.matcher(key).matches()) {
-                fail(context, HttpStatus.BAD_REQUEST, "Kein gueltiger Schluessel: " + key);
-                return;
-            }
-            if (!(entry.getValue() instanceof String text)) {
-                fail(context, HttpStatus.BAD_REQUEST, "Der Wert von " + key + " ist kein Text");
-                return;
-            }
-            // Ein echter Zeilenumbruch wuerde die Datei zerreissen. MiniMessage hat dafuer
-            // ein Tag, und genau das steht auch in der Standardsprache.
-            if (text.contains("\n") || text.contains("\r")) {
-                fail(context, HttpStatus.BAD_REQUEST,
-                        "Zeilenumbruch in " + key + " - bitte <newline> schreiben");
-                return;
-            }
-            entries.put(key, text);
         }
 
         try {

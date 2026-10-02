@@ -19,9 +19,12 @@ import de.kevloe.vibecloud.protocol.ReplayFinished;
 import de.kevloe.vibecloud.protocol.ResourceReport;
 import de.kevloe.vibecloud.protocol.ResourceUsage;
 import de.kevloe.vibecloud.protocol.RunningServer;
+import de.kevloe.vibecloud.protocol.SftpAuthRequest;
+import de.kevloe.vibecloud.protocol.SftpAuthResponse;
 import de.kevloe.vibecloud.wrapper.config.WrapperConfig;
 import de.kevloe.vibecloud.wrapper.server.LocalServerManager;
 import de.kevloe.vibecloud.wrapper.server.ServerCommandHandler;
+import de.kevloe.vibecloud.sftp.SftpAuthority;
 import de.kevloe.vibecloud.wrapper.template.TemplateCache;
 import io.grpc.ManagedChannel;
 import io.grpc.Metadata;
@@ -76,6 +79,11 @@ public final class MasterConnection implements AutoCloseable {
     private StreamObserver<NodeEvent> toMaster;
     private StreamObserver<ConsoleLine> consoleStream;
     private NodeServiceGrpc.NodeServiceStub async;
+    /** Fuer Rueckfragen von ausserhalb des Verbindungs-Threads, etwa der SFTP-Anmeldung. */
+    private volatile NodeServiceGrpc.NodeServiceBlockingStub blockingStub;
+    /** Der SFTP-Port dieses Nodes, wie er dem Master gemeldet wird. 0 = aus. */
+    private volatile int sftpPort;
+    private volatile String sftpHostKey = "";
     private ServerCommandHandler commands;
     private volatile boolean connected;
     private volatile long heartbeatIntervalSeconds = 10;
@@ -144,6 +152,7 @@ public final class MasterConnection implements AutoCloseable {
 
         var blocking = NodeServiceGrpc.newBlockingStub(channel)
                 .withInterceptors(MetadataUtils.newAttachHeadersInterceptor(metadata));
+        blockingStub = blocking;
         async = NodeServiceGrpc.newStub(channel)
                 .withInterceptors(MetadataUtils.newAttachHeadersInterceptor(metadata));
 
@@ -183,7 +192,50 @@ public final class MasterConnection implements AutoCloseable {
                 .setWrapperTime(Protos.toProto(Instant.now()))
                 .setServerAddress(config.serverAddress)
                 .setHighestOutboxSeq(outbox.highestSeq())
+                .setSftpPort(sftpPort)
+                .setSftpHostKey(sftpHostKey)
                 .build();
+    }
+
+    /**
+     * Vor {@link #runForever()} zu setzen - Port und Fingerprint gehen mit der Anmeldung
+     * zum Master, damit er sagen kann, wohin man sich verbindet und woran man den Node
+     * erkennt.
+     */
+    public void announceSftp(int port, String hostKeyFingerprint) {
+        this.sftpPort = port;
+        this.sftpHostKey = hostKeyFingerprint;
+    }
+
+    /**
+     * Fragt den Master, ob diese SFTP-Anmeldung gilt.
+     *
+     * <p>Ohne Verbindung lautet die Antwort nein. Der Wrapper kennt weder Zugaenge noch
+     * Rechte, und ein Zwischenspeicher fuer "hat vorhin gestimmt" liesse jemanden herein,
+     * dem das Recht inzwischen entzogen wurde.
+     */
+    public SftpAuthority.Decision authenticateSftp(
+            String account, String serverName, String password, String clientIp) {
+        NodeServiceGrpc.NodeServiceBlockingStub stub = blockingStub;
+        if (!connected || stub == null) {
+            return SftpAuthority.Decision.denied(
+                    "Master nicht erreichbar");
+        }
+        try {
+            SftpAuthResponse response = stub
+                    .withDeadlineAfter(10, TimeUnit.SECONDS)
+                    .authenticateSftp(SftpAuthRequest.newBuilder()
+                            .setUsername(account)
+                            .setServerName(serverName)
+                            .setPassword(password)
+                            .setClientIp(clientIp)
+                            .build());
+            return new SftpAuthority.Decision(
+                    response.getAllowed(), response.getDetail());
+        } catch (RuntimeException exception) {
+            return SftpAuthority.Decision.denied(
+                    "Master antwortet nicht: " + exception.getMessage());
+        }
     }
 
     /**
@@ -376,6 +428,7 @@ public final class MasterConnection implements AutoCloseable {
         toMaster = null;
         consoleStream = null;
         async = null;
+        blockingStub = null;
         commands = null;
         if (channel != null) {
             channel.shutdownNow();

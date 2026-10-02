@@ -6,6 +6,7 @@ import { Field, Select, TextInput } from "../ui/Form";
 import { Badge, Card, Cell, Empty, PageHeader, Row, Table } from "../ui/Layout";
 import { ConfirmModal, Modal } from "../ui/Modal";
 import { useToast } from "../ui/Toast";
+import { MAINTENANCE_CHANGED } from "../MaintenanceToggle";
 
 /**
  * Servergruppen anlegen und aendern.
@@ -25,6 +26,7 @@ export function Groups() {
   const [editingName, setEditingName] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<Group | null>(null);
+  const [closing, setClosing] = useState<Group | null>(null);
 
   async function load() {
     try {
@@ -55,6 +57,32 @@ export function Groups() {
       toast.success(`Gruppe ${deleting.name} gelöscht.`);
       setDeleting(null);
       await load();
+    } catch (exception) {
+      toast.error(exception instanceof ApiError ? exception.message : "Fehlgeschlagen");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * Die Wartung einer Gruppe - dasselbe wie {@code maintenance on|off <gruppe>}.
+   *
+   * Ein eigener Aufruf und nicht das Feld im Formular: Hier zaehlt das Recht fuer die
+   * Wartung, dort das zum Bearbeiten der Gruppe. Wer ein Minigame kurz sperren darf,
+   * muss dafuer nicht die ganze Gruppe umbauen duerfen.
+   */
+  async function setMaintenance(group: Group, active: boolean) {
+    setBusy(true);
+    try {
+      const answer = await request<{ note: string; plugins: number }>(
+        `/api/v1/settings/maintenance/groups/${group.name}`,
+        { method: "PUT", body: { active } },
+      );
+      toast.success(`${answer.note} An ${answer.plugins} Server gemeldet.`);
+      setClosing(null);
+      await load();
+      // Die Seitenleiste nennt die Gruppen in Wartung - sie soll es gleich wissen.
+      window.dispatchEvent(new Event(MAINTENANCE_CHANGED));
     } catch (exception) {
       toast.error(exception instanceof ApiError ? exception.message : "Fehlgeschlagen");
     } finally {
@@ -98,6 +126,7 @@ export function Groups() {
                   <span className="inline-flex items-center gap-2 font-medium text-text">
                     {group.name}
                     {group.static && <Badge>statisch</Badge>}
+                    {inMaintenance(group) && <Badge tone="warn">Wartung</Badge>}
                   </span>
                 </Cell>
                 <Cell>{group.platform}</Cell>
@@ -107,6 +136,21 @@ export function Groups() {
                 </Cell>
                 <Cell className="tabular-nums">{group.memoryMb} MB</Cell>
                 <Cell align="right">
+                  {/*
+                    Einschalten fragt nach, Aufheben nicht - das eine sperrt Spieler aus,
+                    das andere laesst sie wieder herein.
+                  */}
+                  <Button
+                    size="sm"
+                    icon={inMaintenance(group) ? "check" : "alert"}
+                    className="mr-2"
+                    disabled={busy}
+                    onClick={() =>
+                      inMaintenance(group) ? setMaintenance(group, false) : setClosing(group)
+                    }
+                  >
+                    {inMaintenance(group) ? "Wartung aufheben" : "Wartung"}
+                  </Button>
                   <Button size="sm" icon="edit" onClick={() => setEditingName(group.name)}>
                     Bearbeiten
                   </Button>
@@ -142,6 +186,21 @@ export function Groups() {
       />
 
       <ConfirmModal
+        open={closing !== null}
+        title={`Gruppe ${closing?.name} in Wartung setzen?`}
+        description={
+          "Neue Verbindungen zu Servern dieser Gruppe werden abgelehnt, und sie fällt als " +
+          "Join-Ziel weg. Die laufenden Server bleiben an, und wer schon darauf spielt, " +
+          "bleibt dort. Wer vibecloud.maintenance.bypass hat, kommt weiter hinein - so " +
+          "lässt sich darauf testen."
+        }
+        confirmLabel="In Wartung setzen"
+        busy={busy}
+        onConfirm={() => closing && setMaintenance(closing, true)}
+        onClose={() => setClosing(null)}
+      />
+
+      <ConfirmModal
         open={deleting !== null}
         title={`Gruppe ${deleting?.name} löschen?`}
         description={
@@ -155,6 +214,11 @@ export function Groups() {
       />
     </div>
   );
+}
+
+/** Das Feld kommt als Text vom Master, wie jedes andere der Gruppe. */
+function inMaintenance(group: Group): boolean {
+  return group.fields.maintenance === "true";
 }
 
 /**

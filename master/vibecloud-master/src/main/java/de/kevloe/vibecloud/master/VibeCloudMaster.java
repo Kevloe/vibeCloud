@@ -8,6 +8,7 @@ import de.kevloe.vibecloud.common.VibeCloud;
 import de.kevloe.vibecloud.common.config.JsonConfig;
 import de.kevloe.vibecloud.master.audit.AuditLog;
 import de.kevloe.vibecloud.master.config.MasterConfig;
+import de.kevloe.vibecloud.master.config.MasterConfigFile;
 import de.kevloe.vibecloud.master.console.CloudCommands;
 import de.kevloe.vibecloud.master.console.CloudTerminal;
 import de.kevloe.vibecloud.master.console.CommandOutput;
@@ -46,6 +47,7 @@ import de.kevloe.vibecloud.master.server.ServerRegistry;
 import de.kevloe.vibecloud.master.server.ServerService;
 import de.kevloe.vibecloud.master.server.StaticBindingRepository;
 import de.kevloe.vibecloud.master.settings.CloudSettings;
+import de.kevloe.vibecloud.master.settings.MaintenanceSwitch;
 import de.kevloe.vibecloud.master.template.JarStore;
 import de.kevloe.vibecloud.master.template.LogArchive;
 import de.kevloe.vibecloud.master.template.TemplateStore;
@@ -88,6 +90,14 @@ public final class VibeCloudMaster implements AutoCloseable {
     private final ScreenCommand.AttachmentState attachment = new ScreenCommand.AttachmentState();
 
     private MasterConfig config;
+    /** Die config.json zum Aendern im Betrieb - fuer {@code cloud config} und das Dashboard. */
+    private MasterConfigFile configFile;
+    /** Der globale Wartungsmodus - dieselbe Stelle fuer Konsole und Dashboard. */
+    private MaintenanceSwitch maintenanceSwitch;
+    /** SFTP-Zugaenge und die Entscheidung ueber Anmeldungen, die ein Wrapper meldet. */
+    private de.kevloe.vibecloud.master.sftp.SftpAccountService sftpAccounts;
+    /** SFTP-Zugang zu den Templates der Gruppen - laeuft im Master selbst. */
+    private de.kevloe.vibecloud.master.sftp.TemplateSftp templateSftp;
     private Database database;
     private AuditLog audit;
     private EventBus events;
@@ -128,6 +138,7 @@ public final class VibeCloudMaster implements AutoCloseable {
             // Erststart: Die Vorlage wurde geschrieben, jetzt soll der Betreiber draufschauen.
             return false;
         }
+        configFile = new MasterConfigFile(workingDirectory.resolve("config.json"), config);
 
         database = new Database(config.database);
         if (!database.acquireMasterLock()) {
@@ -152,12 +163,16 @@ public final class VibeCloudMaster implements AutoCloseable {
         StaticBindingRepository bindings = new StaticBindingRepository(database);
         ServerHistoryRepository history = new ServerHistoryRepository(database);
 
-        messages = new MessageService(workingDirectory.resolve("messages"));
+        // Das zweite Verzeichnis ist das der Module: Dort liegen die eigenen Texte des
+        // Betreibers zu einem Modul, neben dessen config.json.
+        messages = new MessageService(workingDirectory.resolve("messages"),
+                workingDirectory.resolve("modules"));
         sessions = new ServerSessionStore();
         plugins = new PluginConnectionRegistry();
         messageDistributor =
                 new de.kevloe.vibecloud.master.message.MessageDistributor(messages, plugins);
         CloudSettings settings = new CloudSettings(database);
+        maintenanceSwitch = new MaintenanceSwitch(settings, groups, plugins, audit);
 
         // --- Spieler und Rechte ---
         RankRepository rankRepository = new RankRepository(database);
@@ -165,6 +180,15 @@ public final class VibeCloudMaster implements AutoCloseable {
         permissionService = new PermissionService(rankRepository, playerRepository, events, audit);
         PlayerService playerService = new PlayerService(playerRepository, rankRepository,
                 permissionService, events);
+
+        // SFTP laeuft im Wrapper, entschieden wird hier - mit den Rechten aus dem Spiel.
+        sftpAccounts = new de.kevloe.vibecloud.master.sftp.SftpAccountService(
+                database, bindings, permissionService::has, audit);
+        // Damit perm und der Rechte-Editor es vorschlagen. Die einzelnen Server ergeben
+        // sich aus ihren Namen: vibecloud.sftp.<server>.
+        permissionService.declareNode(
+                de.kevloe.vibecloud.master.sftp.SftpAccountService.PERMISSION_PREFIX + "*",
+                "SFTP-Zugang zu den Verzeichnissen aller statischen Server");
 
         JarStore jars = new JarStore(workingDirectory.resolve("jars"));
         TemplateStore templates = new TemplateStore(workingDirectory.resolve("templates"), jars);
@@ -187,6 +211,23 @@ public final class VibeCloudMaster implements AutoCloseable {
                 fallbackSelector, settings, playerService, rankRepository);
         startConsole(nodeRepository, certificate, serverService, servers, groups, bindings,
                 console, templates, settings, playerService, rankRepository);
+
+        // Templates liegen auf dem Master - also bietet er selbst den SFTP-Zugang dazu an.
+        templateSftp = new de.kevloe.vibecloud.master.sftp.TemplateSftp(
+                groups, templates, sftpAccounts);
+        templateSftp.start(config.sftp,
+                workingDirectory.resolve("secrets").resolve("sftp-host.key"));
+        permissionService.declareNode(
+                de.kevloe.vibecloud.master.sftp.SftpAccountService.TEMPLATE_PERMISSION_PREFIX
+                + "*", "SFTP-Zugang zu den Templates aller Gruppen");
+        // 'screen' gibt es im Spiel nicht, deshalb schlaegt der Katalog seine Rechte nicht
+        // von selbst vor. Das Dashboard braucht sie aber.
+        permissionService.declareNode(
+                de.kevloe.vibecloud.master.http.HttpApi.CONSOLE_PERMISSION,
+                "Die Konsole eines Servers im Dashboard mitlesen");
+        permissionService.declareNode(
+                de.kevloe.vibecloud.master.http.HttpApi.CONSOLE_SEND_PERMISSION,
+                "Befehle in die Konsole eines Servers schreiben - dort gibt es 'op'");
 
         scheduler.start();
         permissionService.start();
@@ -213,7 +254,7 @@ public final class VibeCloudMaster implements AutoCloseable {
         events.post(new CloudReadyEvent());
         // Nach den Modulen: Sie koennen eigene Routen mitbringen (ab M7).
         startHttp(servers, serverService, groups, nodeRepository, playerService,
-                rankRepository, console);
+                rankRepository, console, bindings);
 
         printStartupHints(nodeRepository, groups, certificate);
         return true;
@@ -236,7 +277,8 @@ public final class VibeCloudMaster implements AutoCloseable {
 
         NodeServiceImpl nodeService = new NodeServiceImpl(nodes, cursors, audit, servers,
                 groups, history, templates, console, logs, scheduler,
-                config.grpc.heartbeatIntervalSeconds, plugins, pluginService, sessions);
+                config.grpc.heartbeatIntervalSeconds, plugins, pluginService, sessions,
+                sftpAccounts);
 
         grpcServer = NettyServerBuilder
                 .forAddress(new InetSocketAddress(config.grpc.bindAddress, config.grpc.port))
@@ -268,7 +310,7 @@ public final class VibeCloudMaster implements AutoCloseable {
         consoleCommands = commands;
         commands.register(CloudTerminal.helpCommand(commands));
         commands.register(new CloudCommands(groups, servers, scheduler, audit, templates.root(),
-                messageDistributor));
+                messageDistributor, configFile));
         commands.register(new NodeCommands(nodeRepository, nodes, audit,
                 certificate.fingerprint(), config.grpc.port));
         commands.register(new GroupCommands(groups, servers, audit));
@@ -277,7 +319,7 @@ public final class VibeCloudMaster implements AutoCloseable {
         commands.register(new RankCommands(permissionService, rankRepository, playerService));
         commands.register(new PermCommands(permissionService, rankRepository, playerService,
                 commands));
-        commands.register(new MaintenanceCommands(settings, groups, audit, plugins));
+        commands.register(new MaintenanceCommands(maintenanceSwitch, groups));
 
         transfers = new de.kevloe.vibecloud.master.server.PlayerTransferService(
                 plugins, servers, audit);
@@ -290,6 +332,8 @@ public final class VibeCloudMaster implements AutoCloseable {
 
         apiTokens = new de.kevloe.vibecloud.master.http.ApiTokenService(database);
         commands.register(new de.kevloe.vibecloud.master.console.ApiCommands(apiTokens, audit));
+        commands.register(new de.kevloe.vibecloud.master.console.SftpCommands(
+                sftpAccounts, playerService, bindings, nodes, groups, () -> templateSftp));
 
         accounts = new de.kevloe.vibecloud.master.http.AccountService(
                 database, permissionService, audit);
@@ -404,7 +448,8 @@ public final class VibeCloudMaster implements AutoCloseable {
     private void startHttp(ServerRegistry servers, ServerService serverService,
                           ServerGroupRepository groups, NodeRepository nodeRepository,
                           PlayerService playerService, RankRepository rankRepository,
-                          ConsoleBuffer console) throws IOException {
+                          ConsoleBuffer console, StaticBindingRepository bindings)
+            throws IOException {
 
         var jwt = de.kevloe.vibecloud.master.security.Jwt.load(
                 workingDirectory.resolve("secrets"));
@@ -413,7 +458,8 @@ public final class VibeCloudMaster implements AutoCloseable {
                 apiTokens, accounts, permissionService, jwt, config.http.secureCookies,
                 servers, serverService, groups, nodeRepository, nodes, playerService,
                 rankRepository, transfers, moduleManager, console, onlinePlayers, audit,
-                workingDirectory.resolve("modules"), messageDistributor, consoleCommands);
+                workingDirectory.resolve("modules"), messageDistributor, consoleCommands,
+                maintenanceSwitch, configFile, sftpAccounts, bindings, templateSftp);
 
         // Neben dem Master, damit ein Update des Dashboards nur ein Verzeichnis ersetzt.
         httpApi.start(config.http, workingDirectory.resolve("dashboard"));
@@ -488,6 +534,7 @@ public final class VibeCloudMaster implements AutoCloseable {
         if (httpApi != null) {
             httpApi.close();
         }
+        closeQuietly(templateSftp);
         if (grpcServer != null) {
             grpcServer.shutdown();
             try {

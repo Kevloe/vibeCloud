@@ -4,6 +4,7 @@ import {
   request,
   type Player,
   type PlayerSummary,
+  type Rank,
   type Server,
 } from "../api";
 import { Button } from "../ui/Button";
@@ -21,7 +22,7 @@ import { PlayerPermissionsModal } from "./Permissions";
  * aus, wird direkt der Datensatz geholt. Ohne Eingabe stehen die zuletzt gesehenen da -
  * das ist die Liste "alle Spieler", sinnvoll sortiert.
  */
-export function Players() {
+export function Players({ selfUuid }: { selfUuid: string }) {
   const toast = useToast();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<PlayerSummary[]>([]);
@@ -29,6 +30,7 @@ export function Players() {
   const [servers, setServers] = useState<Server[]>([]);
   const [sending, setSending] = useState(false);
   const [editingPermissions, setEditingPermissions] = useState(false);
+  const [editingRank, setEditingRank] = useState(false);
 
   async function search(text: string) {
     try {
@@ -142,6 +144,9 @@ export function Players() {
                   benutzbar: Online ist der letzte gemeldete Stand, und der kann eine
                   Sekunde alt sein. Der Master nimmt den Auftrag an, der Proxy entscheidet.
                 */}
+                <Button size="sm" icon="rank" onClick={() => setEditingRank(true)}>
+                  Rang
+                </Button>
                 <Button
                   size="sm"
                   icon="key"
@@ -198,6 +203,19 @@ export function Players() {
         />
       )}
 
+      {player && editingRank && (
+        <ChangeRank
+          player={player}
+          self={player.uuid === selfUuid}
+          onClose={() => setEditingRank(false)}
+          onChanged={async () => {
+            await open(player.uuid);
+            // Der Rang steht auch in der Liste links.
+            await search(query);
+          }}
+        />
+      )}
+
       {player && editingPermissions && (
         <PlayerPermissionsModal
           uuid={player.uuid}
@@ -212,6 +230,169 @@ export function Players() {
         />
       )}
     </div>
+  );
+}
+
+/**
+ * Den Rang eines Spielers setzen - dasselbe wie {@code rank set} und {@code rank reset}.
+ *
+ * Ein Spieler hat genau einen Rang, deshalb ist es eine Auswahl und kein Hinzufuegen.
+ * Mit einer Dauer gilt der neue Rang auf Zeit; danach setzt der Master den bisherigen
+ * wieder ein, nicht den Standardrang.
+ */
+function ChangeRank({
+  player,
+  self,
+  onClose,
+  onChanged,
+}: {
+  player: Player;
+  /** Ob man gerade den eigenen Rang aendert - dann haengt der eigene Zugang daran. */
+  self: boolean;
+  onClose: () => void;
+  onChanged: () => Promise<void>;
+}) {
+  const toast = useToast();
+  const [ranks, setRanks] = useState<Rank[]>([]);
+  const [rank, setRank] = useState(player.rank);
+  const [duration, setDuration] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    request<Rank[]>("/api/v1/ranks")
+      .then(setRanks)
+      .catch((exception) =>
+        toast.error(
+          exception instanceof ApiError ? exception.message : "Laden fehlgeschlagen",
+        ),
+      );
+  }, []);
+
+  const time = duration.trim();
+  // Dieselbe Schreibweise wie in der Konsole. Geprueft wird hier nur, damit der Fehler am
+  // Feld steht - was die Dauer bedeutet, entscheidet der Master.
+  const invalid = time !== "" && !/^[1-9][0-9]*[dhmsDHMS]$/.test(time);
+  // Derselbe Rang ohne Dauer waere ein Aufruf, der nichts aendert - ausser der Rang
+  // laeuft gerade ab: Dann macht genau das ihn dauerhaft.
+  const unchanged = rank === player.rank && time === "" && !player.rankExpiresAt;
+
+  async function run(action: () => Promise<unknown>, done: string) {
+    setBusy(true);
+    try {
+      await action();
+      toast.success(done);
+      onClose();
+      await onChanged();
+    } catch (exception) {
+      toast.error(exception instanceof ApiError ? exception.message : "Fehlgeschlagen");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const set = () =>
+    run(
+      () =>
+        request(`/api/v1/players/${player.uuid}/rank`, {
+          method: "PUT",
+          body: time ? { rank, duration: time } : { rank },
+        }),
+      `${player.name} hat jetzt den Rang ${rank}${time ? ` für ${time}` : ""}.`,
+    );
+
+  const reset = () =>
+    run(
+      () => request(`/api/v1/players/${player.uuid}/rank`, { method: "DELETE" }),
+      `${player.name} hat wieder den Standardrang.`,
+    );
+
+  const standard = ranks.find((entry) => entry.default);
+
+  return (
+    <Modal
+      open
+      title={`Rang von ${player.name}`}
+      description="Wirkt sofort - die Server laden Rechte und Anzeige neu, ohne dass der Spieler sich neu verbinden muss."
+      onClose={onClose}
+      footer={
+        <>
+          <Button
+            variant="ghost"
+            className="mr-auto"
+            disabled={busy || standard?.id === player.rank}
+            title={
+              standard?.id === player.rank
+                ? "Der Spieler hat den Standardrang schon"
+                : undefined
+            }
+            onClick={reset}
+          >
+            Auf Standardrang
+          </Button>
+          <Button variant="ghost" onClick={onClose}>
+            Abbrechen
+          </Button>
+          <Button
+            variant="primary"
+            busy={busy}
+            disabled={!rank || invalid || unchanged}
+            onClick={set}
+          >
+            Setzen
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <Field
+          label="Rang"
+          hint={
+            player.rankExpiresAt
+              ? `Aktuell ${player.rank}, bis ${player.rankExpiresAt}.`
+              : `Aktuell ${player.rank}.`
+          }
+        >
+          {(props) => (
+            <Select {...props} value={rank} onChange={(event) => setRank(event.target.value)}>
+              {/* Solange die Liste laedt, steht wenigstens der aktuelle Rang da. */}
+              {ranks.length === 0 && <option value={player.rank}>{player.rank}</option>}
+              {ranks.map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {entry.id}
+                  {entry.default ? " (Standard)" : ""}
+                </option>
+              ))}
+            </Select>
+          )}
+        </Field>
+
+        <Field
+          label="Dauer"
+          hint="Leer = dauerhaft. Sonst 30d, 12h oder 90m - danach gilt wieder der bisherige Rang."
+          error={invalid ? "Eine Zahl mit d, h, m oder s: 30d, 12h, 90m." : undefined}
+        >
+          {(props) => (
+            <TextInput
+              {...props}
+              value={duration}
+              onChange={(event) => setDuration(event.target.value)}
+              placeholder="dauerhaft"
+            />
+          )}
+        </Field>
+
+        {/*
+          Am Formular und nicht als Toast: Das muss man vor dem Klick lesen, nicht danach.
+        */}
+        {self && (
+          <p className="flex items-start gap-2 rounded-md border border-warn/40 p-3 text-xs text-warn">
+            <Icon name="alert" className="mt-px size-4 shrink-0" />
+            Das ist dein eigener Rang. Fehlt dem neuen das Recht vibecloud.dashboard.login,
+            löscht der Master diesen Zugang - du bist dann sofort abgemeldet.
+          </p>
+        )}
+      </div>
+    </Modal>
   );
 }
 

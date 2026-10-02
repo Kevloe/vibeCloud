@@ -4,6 +4,8 @@ import de.kevloe.vibecloud.api.server.CloudServer;
 import de.kevloe.vibecloud.api.server.ServerGroup;
 import de.kevloe.vibecloud.api.server.ServerPlatformType;
 import de.kevloe.vibecloud.master.audit.AuditLog;
+import de.kevloe.vibecloud.master.config.MasterConfig;
+import de.kevloe.vibecloud.master.config.MasterConfigFile;
 import de.kevloe.vibecloud.master.scheduler.PlacementScheduler;
 import de.kevloe.vibecloud.master.server.ServerGroupRepository;
 import de.kevloe.vibecloud.master.server.ServerRegistry;
@@ -30,16 +32,19 @@ public final class CloudCommands implements CommandRegistry.Command {
     private final AuditLog audit;
     private final Path templateRoot;
     private final de.kevloe.vibecloud.master.message.MessageDistributor messages;
+    private final MasterConfigFile config;
 
     public CloudCommands(ServerGroupRepository groups, ServerRegistry servers,
                          PlacementScheduler scheduler, AuditLog audit, Path templateRoot,
-                         de.kevloe.vibecloud.master.message.MessageDistributor messages) {
+                         de.kevloe.vibecloud.master.message.MessageDistributor messages,
+                         MasterConfigFile config) {
         this.groups = groups;
         this.servers = servers;
         this.scheduler = scheduler;
         this.audit = audit;
         this.templateRoot = templateRoot;
         this.messages = messages;
+        this.config = config;
     }
 
     @Override
@@ -54,12 +59,12 @@ public final class CloudCommands implements CommandRegistry.Command {
 
     @Override
     public String usage() {
-        return "cloud setup | status | messages reload";
+        return "cloud setup | status | messages reload | config [set <feld> <wert>]";
     }
 
     @Override
     public List<String> subCommands() {
-        return List.of("setup", "status", "messages");
+        return List.of("setup", "status", "messages", "config");
     }
 
     @Override
@@ -67,7 +72,15 @@ public final class CloudCommands implements CommandRegistry.Command {
         if (args.size() <= 1) {
             return subCommands();
         }
-        return args.getFirst().equals("messages") ? List.of("reload") : List.of();
+        return switch (args.getFirst().toLowerCase(Locale.ROOT)) {
+            case "messages" -> args.size() == 2 ? List.of("reload") : List.of();
+            case "config" -> switch (args.size()) {
+                case 2 -> List.of("set");
+                case 3 -> MasterConfigFile.editableFields();
+                default -> List.of();
+            };
+            default -> List.of();
+        };
     }
 
     @Override
@@ -80,8 +93,52 @@ public final class CloudCommands implements CommandRegistry.Command {
             case "setup" -> setup(out);
             case "status" -> status(out);
             case "messages" -> messages(out, args);
+            case "config" -> config(out, args);
             default -> out.error("Unbekannt. Syntax: " + usage());
         }
+    }
+
+    /**
+     * Zeigt und aendert die Felder der {@code config.json}, die sich im Betrieb aendern
+     * lassen.
+     *
+     * <p>Der Befehl ist auch der Grund, warum das Dashboard dafuer kein eigenes Recht
+     * braucht: Die Einstellungsseite haengt an {@code vibecloud.command.cloud.config},
+     * und geschrieben wird hier wie dort ueber {@link MasterConfigFile}.
+     */
+    private void config(CommandOutput out, List<String> args) {
+        if (args.size() == 1) {
+            MasterConfig saved;
+            try {
+                saved = config.read();
+            } catch (IOException exception) {
+                out.error(exception.getMessage());
+                return;
+            }
+            for (String field : MasterConfigFile.editableFields()) {
+                String value = MasterConfigFile.valueOf(saved, field);
+                String running = config.runningValue(field);
+                out.info(String.format("  %-34s %-8s%s", field, value,
+                        value.equals(running) ? "" : "(laeuft noch mit " + running + ")"));
+            }
+            config.lockedFields().forEach((field, value) -> out.info(
+                    String.format("  %-34s %-8s(nur in der config.json)", field, value)));
+            return;
+        }
+        if (args.size() != 4 || !args.get(1).equalsIgnoreCase("set")) {
+            out.error("Syntax: cloud config | cloud config set <feld> <wert>");
+            return;
+        }
+        try {
+            config.update(Map.of(args.get(2), args.get(3)));
+        } catch (IllegalArgumentException | IOException exception) {
+            out.error(exception.getMessage());
+            return;
+        }
+        audit.record("CONSOLE", "config.changed", args.get(2), Map.of("value", args.get(3)));
+        out.success(args.get(2) + " steht jetzt auf " + args.get(3) + ".");
+        out.warn("Wirksam nach einem Neustart des Masters - bis dahin laeuft er mit "
+                 + config.runningValue(args.get(2)) + ".");
     }
 
     private void setup(CommandOutput out) {

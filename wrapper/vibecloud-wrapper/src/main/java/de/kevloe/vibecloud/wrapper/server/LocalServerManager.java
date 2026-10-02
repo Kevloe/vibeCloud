@@ -189,6 +189,33 @@ public final class LocalServerManager {
         return Optional.ofNullable(servers.get(name));
     }
 
+    /** Ein Servername ist ein Verzeichnisname - mehr als das darf er nicht sein. */
+    private static final java.util.regex.Pattern SAFE_NAME =
+            java.util.regex.Pattern.compile("[A-Za-z0-9][A-Za-z0-9_-]{0,63}");
+
+    /**
+     * Das Verzeichnis eines statischen Servers - ob er gerade laeuft oder nicht.
+     *
+     * <p>Fuer den SFTP-Zugang. Erkannt wird ein statischer Server an seiner Spurdatei und
+     * nicht an der Liste der laufenden: Dateien will man gerade dann aendern, wenn er
+     * steht. Ein dynamischer Server hat hier nichts verloren - sein Verzeichnis ist nach
+     * dem Stopp weg, und alles Hochgeladene mit ihm.
+     */
+    public Optional<Path> staticDirectory(String name) {
+        if (name == null || !SAFE_NAME.matcher(name).matches()) {
+            return Optional.empty();
+        }
+        Path directory = root.resolve("servers").resolve(name);
+        if (!Files.isDirectory(directory)) {
+            return Optional.empty();
+        }
+        return readMarker(directory)
+                // Der Name muss genau stimmen: Unter Windows fuehrt auch "SURVIVAL-1" in
+                // dasselbe Verzeichnis, gemeint ist dann aber ein anderer Server.
+                .filter(marker -> marker.staticServer() && name.equals(marker.server()))
+                .map(marker -> directory);
+    }
+
     public List<LocalServer> all() {
         return servers.values().stream()
                 .sorted(Comparator.comparing(LocalServer::name))

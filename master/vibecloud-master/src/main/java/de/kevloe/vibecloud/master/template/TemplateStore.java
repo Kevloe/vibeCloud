@@ -113,6 +113,31 @@ public final class TemplateStore {
         return manifest;
     }
 
+    /**
+     * Das Template-Verzeichnis einer Gruppe, zum Bearbeiten ueber SFTP.
+     *
+     * <p>Der Name des Templates ist ein freies Feld der Gruppe ({@code group edit ...
+     * template}). Als Verzeichnis taugt er nur, wenn er ein einfacher Name ist und nicht
+     * {@code global}: Dort liegen die Dateien <b>aller</b> Gruppen samt dem Cloud-Plugin,
+     * und das ist mehr, als das Recht fuer eine Gruppe hergibt.
+     *
+     * <p>Angelegt wird hier nichts - das Verzeichnis darf fehlen.
+     */
+    public Optional<Path> editableDirectory(ServerGroup group) {
+        String template = group.template();
+        if (template == null || !SAFE_TEMPLATE.matcher(template).matches()
+            || template.equalsIgnoreCase("global")) {
+            return Optional.empty();
+        }
+        Path directory = root.resolve(template).normalize();
+        return directory.getParent() != null && directory.getParent().equals(root.normalize())
+                ? Optional.of(directory)
+                : Optional.empty();
+    }
+
+    private static final java.util.regex.Pattern SAFE_TEMPLATE =
+            java.util.regex.Pattern.compile("[A-Za-z0-9][A-Za-z0-9_-]{0,63}");
+
     public void setBundleProvider(BundleProvider provider) {
         this.bundleProvider = provider;
     }

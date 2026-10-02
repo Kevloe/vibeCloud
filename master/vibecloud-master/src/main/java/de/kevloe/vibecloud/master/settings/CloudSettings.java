@@ -36,9 +36,12 @@ public final class CloudSettings {
     }
 
     private void loadAll() {
+        // "#>> '{}'" holt den Wert als Text aus dem JSON. Ohne das kaeme "true" samt seinen
+        // Anfuehrungszeichen zurueck, und parseBoolean machte daraus false: Der
+        // Wartungsmodus war nach jedem Master-Neustart stillschweigend wieder aus.
         try (Connection connection = database.connection();
              PreparedStatement statement = connection.prepareStatement(
-                     "SELECT key, value FROM cloud_settings");
+                     "SELECT key, value #>> '{}' AS value FROM cloud_settings");
              ResultSet result = statement.executeQuery()) {
             while (result.next()) {
                 cache.put(result.getString("key"), result.getString("value"));

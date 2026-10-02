@@ -7,6 +7,7 @@ import {
   type Module,
   type Session,
 } from "./api";
+import { MaintenanceToggle } from "./MaintenanceToggle";
 import { Sidebar, type NavEntry } from "./ui/Sidebar";
 import { useToast } from "./ui/Toast";
 import { Login } from "./pages/Login";
@@ -20,6 +21,8 @@ import { Players } from "./pages/Players";
 import { Ranks } from "./pages/Ranks";
 import { Translations } from "./pages/Translations";
 import { Modules } from "./pages/Modules";
+import { Settings } from "./pages/Settings";
+import { Sftp } from "./pages/Sftp";
 
 /** Die Seiten des Dashboards. */
 type Page =
@@ -30,7 +33,9 @@ type Page =
   | "players"
   | "ranks"
   | "messages"
-  | "modules";
+  | "files"
+  | "modules"
+  | "settings";
 
 const PAGES: Array<NavEntry<Page>> = [
   { id: "overview", label: "Übersicht", icon: "overview" },
@@ -40,7 +45,9 @@ const PAGES: Array<NavEntry<Page>> = [
   { id: "players", label: "Spieler", icon: "player" },
   { id: "ranks", label: "Ränge", icon: "rank" },
   { id: "messages", label: "Sprachen", icon: "language" },
+  { id: "files", label: "Dateien", icon: "folder" },
   { id: "modules", label: "Module", icon: "module" },
+  { id: "settings", label: "Einstellungen", icon: "settings" },
 ];
 
 export function App() {
@@ -105,6 +112,7 @@ export function App() {
           setOpenServer(null);
           setPage(id);
         }}
+        footer={<MaintenanceToggle />}
         accountName={session.name}
         onLogout={async () => {
           await logout();
@@ -127,10 +135,12 @@ export function App() {
               {page === "servers" && <Servers onOpenServer={setOpenServer} />}
               {page === "groups" && <Groups />}
               {page === "nodes" && <Nodes />}
-              {page === "players" && <Players />}
+              {page === "players" && <Players selfUuid={session.uuid} />}
               {page === "ranks" && <Ranks />}
               {page === "messages" && <Translations />}
               {page === "modules" && <Modules modules={modules} />}
+              {page === "files" && <Sftp />}
+              {page === "settings" && <Settings />}
             </>
           )}
         </div>

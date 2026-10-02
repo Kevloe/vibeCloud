@@ -113,6 +113,21 @@ public final class NodeRegistry implements AutoCloseable {
                 .orElse(node);
     }
 
+    /**
+     * Der SFTP-Port dieses Nodes, wie sein Wrapper ihn gemeldet hat.
+     *
+     * @return 0, wenn der Node nicht verbunden ist oder kein SFTP anbietet
+     */
+    public int sftpPortOf(String node) {
+        return connection(node).map(ConnectedNode::info).map(RegisterInfo::sftpPort).orElse(0);
+    }
+
+    /** Fingerprint des SFTP-Host-Schluessels dieses Nodes - leer, wenn unbekannt. */
+    public String sftpHostKeyOf(String node) {
+        return connection(node).map(ConnectedNode::info).map(RegisterInfo::sftpHostKey)
+                .orElse("");
+    }
+
     /** Schickt einen Befehl durch den Rueckkanal dieses Nodes. */
     public boolean send(String node, NodeCommand command) {
         ConnectedNode target = connected.get(node);
@@ -183,11 +198,13 @@ public final class NodeRegistry implements AutoCloseable {
             String osName,
             String wrapperVersion,
             long clockSkewMillis,
-            String serverAddress) {
+            String serverAddress,
+            int sftpPort,
+            String sftpHostKey) {
 
         /** Fuer den Fall, dass ein Control-Stream ohne vorheriges Register ankommt. */
         static RegisterInfo unknown() {
-            return new RegisterInfo(0, 0, "-", "-", 0, "");
+            return new RegisterInfo(0, 0, "-", "-", 0, "", 0, "");
         }
     }
 

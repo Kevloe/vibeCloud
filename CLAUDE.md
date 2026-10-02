@@ -78,10 +78,50 @@ verbindliche Quelle** fuer Architektur und Entscheidungen — bei Widerspruch gi
   Bearbeiten in Modalen, Rueckmeldungen als Toasts, eigene Bausteine unter `src/ui/`
   (Icon, Button, Form, Modal, Toast, Layout, Sidebar), Farben als `@theme`-Tokens,
   Schriften im Bundle. Begruendungen unter "Oberflaeche des Dashboards".
+- Rang eines Spielers im Dashboard setzen und zuruecksetzen (`AdminRoutes`, Dialog in
+  `pages/Players.tsx`). Uebersetzen auf einer eigenen Seite statt im Dialog, dazu die
+  Texte der Module (`modules/<id>/messages/<sprache>.yml`). Seite "Einstellungen":
+  Wartungsmodus und die aenderbaren Felder der `config.json` (`SettingsRoutes`,
+  `MasterConfigFile`, `MaintenanceSwitch`), in der Konsole als `cloud config`.
+  274 Tests gruen. Begruendungen unter "Einstellungen im Dashboard" und "Sprachen im
+  Dashboard".
+- SFTP fuer statische Server: `SftpGateway` im Wrapper (Apache MINA SSHD), entschieden
+  wird im Master (`SftpAccountService`, RPC `AuthenticateSftp`, Tabelle V6), Zugaenge mit
+  `sftp create <spieler>`, Recht je Server `vibecloud.sftp.<server>`. 293 Tests gruen.
+  Durchgespielt mit eigenem Master, eigenem Wrapper und dem OpenSSH-Client in einer
+  Wegwerf-Datenbank: hochladen, holen, loeschen, falsches Passwort, Server eines anderen
+  Nodes, entzogenes Recht. **Nicht** geprueft: unter Linux, von aussen ueber eine echte
+  Firewall, mit FileZilla oder WinSCP. Begruendungen unter "SFTP fuer statische Server".
+- Seite "Dateien" im Dashboard: eigene SFTP-Verbindungsdaten je Server, Passwort selbst
+  erzeugen, Knopf "In WinSCP oeffnen". 295 Tests gruen. Im Browser gesehen (Liste,
+  Zustand "Node nicht verbunden", Passwort-Dialog) und mit dem dort erzeugten Passwort per
+  OpenSSH verbunden. **Nicht** geklickt: der WinSCP-Knopf selbst - ob Windows die Adresse
+  an WinSCP uebergibt, haengt an dessen Installation.
+- SFTP auch fuer Templates: Der Master bietet es selbst an (`TemplateSftp`), der
+  SFTP-Code liegt jetzt im Modul `common/vibecloud-sftp`, die Seite "Dateien" hat einen
+  zweiten Abschnitt. 305 Tests gruen. Durchgespielt in der Wegwerf-Umgebung: Template per
+  OpenSSH gefuellt, Ablehnung ohne Recht, fuer eine unbekannte Gruppe und fuer `global`,
+  Seite im Browser gesehen. **Nicht** geprueft: dass ein danach gestarteter Server die
+  Datei wirklich bekommt - dafuer haette ein echter Paper-Server starten muessen.
+- Wartungsmodus: Schalter in der Seitenleiste, Wartung je Gruppe auf der Seite "Gruppen",
+  beides ueber `MaintenanceSwitch`. Dabei gefunden und behoben: Der globale Schalter
+  ueberlebte keinen Master-Neustart. 308 Tests gruen, im Browser durchgeklickt.
+  **Nicht** geprueft: was ein Proxy daraus macht - es war keiner verbunden.
+- Befehle an die Konsole eines Servers aus dem Dashboard (Server-Detailseite,
+  `POST /servers/{name}/command`, Recht `vibecloud.command.screen.send`). Dabei gefunden
+  und behoben: `group edit ... memory 64` wurde gespeichert und legte den Scheduler fuer
+  alle Gruppen still. 312 Tests gruen. Durchgespielt mit einem Stellvertreter-Server, den
+  die Cloud aus einem Template gestartet hat - der Befehl stand danach in seinem Log.
+  **Nicht** gesehen: das Eingabefeld im Browser (die Erweiterung war nicht verbunden) und
+  ein echter Paper-Server.
 - Offen in M7: `/acp` ist noch nicht im Spiel getestet, und die Online-Liste ist ohne
   Spieler nie gefuellt gesehen worden. Das Dashboard ist am Breitbild geprueft,
   **nicht am Telefon** - die Schublade der Seitenleiste unter 1024 px hat nie jemand
   gesehen.
+- **Die drei Neuen hat noch niemand im Browser gesehen.** Geprueft ist: Tests gruen,
+  `npm run build` ohne Typfehler, der Master startet und jeder neue Endpunkt antwortet
+  ohne Anmeldung mit 401 statt 404. Angemeldet durchgeklickt - Rang-Dialog,
+  Uebersetzungs-Seite, Einstellungen - ist nichts davon.
 
 # NICHT verifiziert oder bewusst offen (M4)
 - **Die Rang-Anzeige im Spiel.** `RankDisplay` kompiliert und wird aufgerufen, aber ohne
@@ -222,6 +262,11 @@ Der Weg ist sicher, weil der Node-Kanal authentifiziert und fingerprint-gepinnt 
   gehoert in ein Modal oder an das Formular. Deshalb steht ein Anmeldefehler am Formular
   und das Node-Token in einem Dialog, der weggeklickt werden muss - ein Toast waere nach
   vier Sekunden weg, und das Token gibt es nur einmal.
+- **Zwei Ausnahmen vom Modal, beide mit Grund.** Uebersetzt wird auf einer eigenen Seite:
+  Es sind ueber hundert Zeilen, und im Dialog sah man davon einen Ausschnitt, der in sich
+  selbst scrollt. Suche und Speichern bleiben dort beim Scrollen oben stehen, und "Zurueck"
+  fragt nach, wenn etwas ungespeichert ist. Die Einstellungen sind selbst das Formular -
+  ein Dialog ueber einer sonst leeren Seite waere ein Klick ohne Zweck.
 - **Das Modal faengt den Fokus.** Beim Oeffnen springt er auf das erste Feld, Tab bleibt
   darin, Escape schliesst, und danach steht er wieder auf dem Knopf, der es geoeffnet hat.
   Ohne das waere die Oberflaeche mit der Tastatur unbedienbar. Geschlossen wird nur bei
@@ -292,6 +337,111 @@ Der Weg ist sicher, weil der Node-Kanal authentifiziert und fingerprint-gepinnt 
   eigenes Rechteschema fuer die Schnittstelle.
 - **Einzelne Rechte stehen in `PermissionRoutes`**, nicht hier: Dort geht es um Felder mit
   je einem Wert, bei Rechten um Regeln mit Knoten, Kontext und Ablauf.
+- **Der Rang eines Spielers geht ueber `PermissionService.setRank`/`resetRank`** -
+  dieselben Aufrufe wie `rank set` und `rank reset`, mit deren Rechten
+  (`vibecloud.command.rank.set`, `.reset`). Der Dienst schreibt Verlauf und Protokoll
+  selbst; die Route tut es nicht noch einmal. Die Dauer versteht `Times.parseDuration`,
+  und nach Ablauf gilt wieder der **bisherige** Rang, nicht der Standardrang.
+- **Der eigene Rang ist der eigene Zugang.** Wer sich im Dashboard einen Rang ohne
+  `vibecloud.dashboard.login` gibt, ist danach abgemeldet - das ist dasselbe Verhalten wie
+  in der Konsole und kein Fehler. Der Dialog warnt davor am Formular, nicht per Toast:
+  Das muss man vor dem Klick lesen.
+
+# Einstellungen im Dashboard
+- **Auf der Seite steht nur noch die `config.json`.** Der Wartungsmodus gilt sofort, die
+  Datei erst nach einem Neustart des Masters - zwei Wirkungen, die nicht in ein Formular
+  gehoeren. Der Schalter sitzt deshalb in der Seitenleiste (siehe "Wartungsmodus im
+  Dashboard").
+- **Nicht jedes Feld der `config.json` ist aenderbar.** Draussen bleibt, was entscheidet,
+  ob Master und Dashboard ueberhaupt hochkommen: `database.*`, `grpc.bindAddress`,
+  `grpc.port`, `http.enabled`, `http.port`, `http.secureCookies`. Ein Tippfehler dort
+  liesse sich ueber genau den Weg nicht zuruecknehmen, ueber den er hineinkam. Die
+  Datenbank wird nicht einmal angezeigt - das Passwort gehoert nicht in einen Browser.
+- **Geschrieben wird die Datei, nicht der laufende Master** (`MasterConfigFile`). Ein Teil
+  der Werte steckt nach dem Start in Diensten, die sich nicht umstellen lassen (Takt des
+  Schedulers, Heartbeat). Die Haelfte sofort und die andere nach dem Neustart waere eine
+  Regel, die sich niemand merkt. Die Seite zeigt deshalb beides: was in der Datei steht
+  und womit der Master noch laeuft.
+- **Mehrere Felder in einem Aufruf** - anders als bei Gruppen und Raengen. Die Felder
+  haengen voneinander ab: Wer den Portbereich von 30000-30999 auf 40000-40999 verschiebt,
+  haette mit einem PATCH je Feld zwischendurch 40000-30999, und schon der erste Schritt
+  wuerde abgelehnt. Geprueft wird das Ganze, gespeichert wird alles oder nichts.
+- **In der Datei aendern sich nur die genannten Felder.** Geschrieben wird ueber den
+  JSON-Baum, nicht ueber `MasterConfig`: Sonst verschwaenden Eintraege, die diese Version
+  nicht kennt, und fehlende Felder bekaemen nebenbei ihre Vorgabe eingetragen.
+- **Lesen und Schreiben stehen in einem Eintrag** (`Field` in `MasterConfigFile`), nicht
+  in zwei Listen wie bei `valueOf`/`updateField`. Hier gab es noch keine zweite Liste -
+  dann muss auch keine entstehen.
+- **`cloud config` gibt es, damit das Dashboard kein eigenes Recht braucht.** Die Seite
+  haengt an `vibecloud.command.cloud.config`, der Schalter an
+  `vibecloud.command.maintenance.on`/`.off`/`.list`. Wer nur `.off` hat, darf aufheben,
+  aber nicht einschalten - wie in der Konsole.
+
+# Serverkonsole im Dashboard
+- **Mitlesen und Tippen sind zwei Rechte.** Das Log haengt an `vibecloud.command.screen`,
+  das Absenden an `vibecloud.command.screen.send` - und das erste deckt das zweite nicht
+  ab ("a.b" deckt "a.b.c" nicht ab). In der Konsole eines Gameservers gibt es `op`; wer
+  dort tippen darf, darf auf diesem Server alles. In der Master-Konsole faellt der
+  Unterschied nicht auf, weil dort ohnehin jeder alles darf.
+- **Das ist ein Knoten, den die Konsole nicht kennt** - eine bewusste Ausnahme von "Rechte
+  je Aktion sind die der Befehle". `screen` gibt es im Spiel nicht, also schlaegt der
+  Katalog seine Rechte nicht von selbst vor; beide werden beim Start angemeldet
+  (`HttpApi.CONSOLE_PERMISSION`, `CONSOLE_SEND_PERMISSION`).
+- **Derselbe Weg wie `screen`**: `ServerService.execute` schreibt die Zeile in die
+  Standardeingabe des Servers und den Befehl samt Absender ins Protokoll. Im Dashboard
+  wird nichts nachgebaut.
+- **Genau eine Zeile je Aufruf**, hoechstens 1000 Zeichen. Ein Zeilenumbruch waere ein
+  zweiter Befehl, der im Protokoll nicht als solcher auftaucht.
+- **"angenommen", nicht "ausgefuehrt".** Eine Antwort auf einen Befehl gibt es in dieser
+  Richtung nicht; was der Server daraus macht, steht in seinem Log. Die Oberflaeche reiht
+  die eigene Zeile (`> ...`) deshalb selbst ins Log ein - sonst saehe man die Antwort ohne
+  die Frage. Andere, die mitlesen, sehen die Zeile nicht; wer was geschickt hat, steht im
+  Protokoll.
+- **Ein fehlgeschlagener Befehl bleibt im Feld stehen**, und Pfeil hoch/runter holt die
+  letzten fuenfzig zurueck - nur fuer diese Seite, nach dem Verlassen ist es weg.
+
+# Gruppen-Felder
+- **Gespeichert wird nur, was sich danach noch lesen laesst** (`ServerGroupRepository.
+  updateField`). Die Regeln einer Gruppe stehen in `ServerGroup` (mindestens 128 MB,
+  `max_online` nicht unter `min_online`, `%id%` im Namensmuster), die Datenbank kennt sie
+  nicht. Ohne die Gegenprobe nahm sie `memory 64` an, danach warf jedes `findAll()`, und
+  der Scheduler startete fuer **keine** Gruppe mehr einen Server - ein Tippfehler in einem
+  Feld, in Konsole oder Dashboard, legte die Cloud still. Jetzt laeuft die Aenderung in
+  einer Transaktion und wird zurueckgenommen, wenn der Konstruktor wirft. Abgedeckt von
+  `ServerGroupRepositoryTest`.
+
+# Wartungsmodus im Dashboard
+- **Der globale Schalter sitzt unten in der Seitenleiste**, ueber dem eigenen Zugang
+  (`MaintenanceToggle.tsx`, `footer` der `Sidebar`), nicht mehr auf der Einstellungsseite.
+  Er gilt sofort und fuer alle - so etwas soll von jeder Seite aus zu sehen und zu
+  schalten sein. Ein Netzwerk, in das niemand hereinkommt, entdeckt man sonst erst auf der
+  Einstellungsseite.
+- **Zu sehen nur mit `maintenance.list`**, geschaltet wird je Richtung: `mayEnable` und
+  `mayDisable` kommen in der Antwort mit (`ApiAuth.allows`). Das ist eine Auskunft fuer die
+  Oberflaeche, keine Pruefung - der Endpunkt, der schaltet, ruft weiter `require`.
+- **Einschalten fragt nach, Aufheben nicht**, global wie je Gruppe: Das eine sperrt Spieler
+  aus, das andere laesst sie wieder herein.
+- **Der Dialog haengt per Portal an `document.body`.** Die Seitenleiste wird mit
+  `transform` verschoben, und darin waere ein `fixed`-Dialog an ihr festgemacht statt am
+  Fenster.
+- **Die Anzeige holt sich den Stand alle 30 Sekunden neu** und sofort nach einer Aenderung
+  an einer Gruppe (Ereignis `vibecloud:maintenance`). Die Wartung laesst sich auch in der
+  Konsole und von anderen umschalten.
+- **Global und je Gruppe laufen ueber eine Stelle** (`MaintenanceSwitch`): speichern,
+  protokollieren, den Proxys mitteilen. Das Letzte vergisst man am leichtesten - genau so
+  war es: Das Feld `maintenance` einer Gruppe liess sich im Dashboard setzen, und kein
+  Proxy erfuhr davon. Jetzt geht auch `PATCH /groups/{name}` mit diesem Feld dort durch.
+- **Die Gruppen-Wartung hat einen eigenen Endpunkt und Knopf** (Seite "Gruppen",
+  `PUT /settings/maintenance/groups/{name}`). Er haengt an `maintenance.on`/`.off` und nicht
+  an `group.edit`: Wer ein Minigame kurz sperren darf, soll dafuer nicht die ganze Gruppe
+  umbauen duerfen.
+- **Einen Wartungsmodus fuer einen einzelnen Server gibt es nicht.** Die Server einer
+  Gruppe sind austauschbar; einen davon zu sperren hiesse nur, dass der Proxy den naechsten
+  nimmt. Wer einen einzelnen Server sperren will, hat eine Gruppe mit einem Server.
+- **Der globale Schalter ueberlebte keinen Master-Neustart.** Gespeichert wird als JSON
+  (`"true"`), gelesen wurde der Text samt Anfuehrungszeichen, und `parseBoolean` machte
+  daraus `false` - das Netzwerk war nach jedem Neustart stillschweigend wieder offen.
+  `CloudSettings` liest jetzt mit `value #>> '{}'`. Abgedeckt von `MaintenanceSwitchTest`.
 
 # Rechte im Dashboard
 - **Keine zweite Auswertung.** `PermissionRoutes` liest ueber `PermissionService` und
@@ -385,6 +535,134 @@ Der Weg ist sicher, weil der Node-Kanal authentifiziert und fingerprint-gepinnt 
   gaebe keinen Rueckfall mehr.
 - **Recht ist `vibecloud.command.cloud.messages`** - dasselbe wie fuer
   `cloud messages reload`. Kein eigenes Schema fuer die Oberflaeche.
+- **Die Texte eines Moduls liegen in `modules/<id>/messages/<sprache>.yml`** - neben
+  dessen `config.json`, nicht in `messages/`. Dort steht **nur, was vom JAR abweicht**
+  (`MessageService.saveModuleEntries`). Der ganze Satz froere die Texte ein, und genau
+  deshalb wurden sie bisher gar nicht bearbeitet; so folgt jeder Text, den niemand
+  angefasst hat, weiter den Updates des Moduls. Steht nichts Eigenes mehr drin, wird die
+  Datei geloescht.
+- **Beim Laden liegt der eigene Text ueber dem aus dem JAR** (`overlayModuleOverrides`),
+  mit demselben Praefix (`punishment.ban.screen`). Ein Modul kann damit weiterhin keine
+  Texte der Cloud ueberschreiben, und der Betreiber keine eines anderen Moduls.
+- **Eine Sprache gibt es, wenn die Cloud ihre Datei hat.** Die Module haengen sich daran:
+  Angelegt und geloescht wird eine Sprache nur bei den Texten der Cloud. Eigene Modul-Texte
+  zu einer geloeschten Sprache bleiben liegen, bringen sie aber nicht von selbst zurueck -
+  und gespeichert wird fuer eine Sprache ohne Datei nichts.
+- **Ein Modul laesst sich in eine Sprache uebersetzen, die es nicht mitbringt.** Dann ist
+  jeder Text ein eigener. Zu sehen ist das Modul nur, solange es geladen ist und Texte
+  eingehaengt hat - das ist zugleich der Schutz vor einer erfundenen Kennung im Pfad.
+- **Die Antwort fuer ein Modul hat drei Saetze**: was gilt (`entries`), die Standardsprache
+  als Vorlage (`defaults`) und was das JAR mitbringt (`bundled`). Ohne das Dritte saehe
+  niemand, welcher Text ein eigener ist, und koennte ihn nicht zuruecksetzen.
+
+# SFTP fuer Templates (dynamische Gruppen)
+- **Einen dynamischen Server bearbeitet man nicht - man bearbeitet sein Template.** Sein
+  Verzeichnis entsteht bei jedem Start neu und ist nach dem Stopp weg. Was bleiben soll,
+  gehoert nach `templates/<template>/` auf dem Master.
+- **Der Master bietet dafuer selbst SFTP an** (`TemplateSftp`, `sftp` in der config.json,
+  standardmaessig aus, Port **2223**). Nicht 2222 wie der Wrapper: Laufen beide auf
+  demselben Rechner, stritten sie sich sonst um den Port.
+- **Derselbe Code wie im Wrapper**, in einem eigenen Modul `common/vibecloud-sftp`
+  (`SftpGateway`). Nicht in `vibecloud-api`: Dort haengen die Plattform-Plugins dran, und
+  ein SSH-Server hat in einem Paper-Plugin nichts verloren. Nur Master und Wrapper
+  haengen davon ab.
+- **Benutzername `<zugang>.<gruppe>`, Recht `vibecloud.sftp.template.<gruppe>`.** Eine
+  eigene Ebene und nicht `vibecloud.sftp.<gruppe>`: Ein Template wirkt auf jeden Server
+  der Gruppe auf jedem Node, ein Serververzeichnis auf einen. `vibecloud.sftp.*` deckt
+  **beides** ab - wer es vorher fuer statische Server bekommen hat, darf jetzt auch an
+  alle Templates.
+- **Zugang und Passwort sind dieselben** wie fuer statische Server; nur die Adresse ist
+  eine andere (Master statt Node). Im Dashboard nimmt die Seite dafuer
+  `location.hostname` - der Master weiss nicht, unter welchem Namen man ihn erreicht.
+- **Eine Aenderung wirkt auf neu gestartete Server**, ohne dass ein Cache geleert wird:
+  `TemplateStore.buildManifest` liest das Verzeichnis bei jedem Start. Laufende Server
+  behalten ihre Dateien. Ein Server, der mitten in einem Upload startet, bekommt die
+  halbe Datei - dagegen gibt es nichts.
+- **Auch statische Gruppen haben ein Template** und stehen in der Liste. Es ist die
+  Antwort auf "meine per SFTP geaenderte `server.properties` ist nach dem Start wieder
+  die alte": Kommt die Datei aus dem Template, aendert man sie dort.
+- **`templates/global/` ist nicht erreichbar**, und der Template-Name muss ein einfacher
+  Name sein (`TemplateStore.editableDirectory`). Er ist ein freies Feld der Gruppe -
+  ungeprueft fuehrte `../secrets` zum JWT-Schluessel. Abgedeckt von
+  `TemplateDirectoryTest`.
+- **Ein fehlendes Template-Verzeichnis entsteht erst nach der Anmeldung** - gefragt wird
+  nach dem Verzeichnis schon vorher, und sonst legte jeder geratene Name einen Ordner an.
+
+# SFTP fuer statische Server
+- **Der SFTP-Server laeuft im Wrapper**, nicht im Master: Die Dateien liegen auf dem Node.
+  Ein Umweg ueber den Master hiesse, jede Welt durch den gRPC-Kanal zu schieben. Damit ist
+  es der **einzige Port, den ein Root fuer die Cloud nach aussen oeffnet** - deshalb
+  standardmaessig aus (`sftp.enabled` in der wrapper.json, Port 2222).
+- **Ein Lauscher je Node, nicht einer je Server.** Der Benutzername sagt, wohin es geht:
+  `<zugang>.<server>`, getrennt am **letzten** Punkt (ein Bedrock-Name beginnt mit einem).
+  Jede Sitzung ist in `servers/<server>` eingesperrt. Ein Port je Server waere ein
+  Portbereich mehr in der Firewall.
+- **Nur statische Server.** Das Verzeichnis eines dynamischen ist nach dem Stopp weg, und
+  alles Hochgeladene mit ihm. Erkannt wird ein statischer an seiner Spurdatei, nicht an der
+  Liste der laufenden - Dateien aendert man gerade dann, wenn er steht.
+- **Der Wrapper entscheidet nichts.** Er prueft, was er selbst weiss (Form des Namens, den
+  Server gibt es hier, er ist statisch), und fragt dann den Master. Ohne Verbindung kommt
+  niemand herein, und gemerkt wird sich nichts: "hat vorhin gestimmt" liesse jemanden
+  herein, dem das Recht inzwischen entzogen wurde.
+- **Was der Wrapper selbst ablehnen kann, erreicht den Master nicht.** Jeder offene
+  SSH-Port bekommt Dauerbeschuss mit `root` und `admin`. Dazu fuenf Fehlversuche je
+  Adresse, dann zehn Minuten Ruhe - nur im Speicher.
+- **Der Master prueft den Node mit**: Der Server muss an genau den Node gebunden sein, der
+  fragt (`static_server_bindings`). Sonst koennte ein uebernommener Node Passwoerter gegen
+  Server durchprobieren, die woanders liegen.
+- **Rechte kommen aus dem Spiel**: `vibecloud.sftp.<server>`, `vibecloud.sftp.*` fuer alle.
+  Kein zweites Rechtesystem. Geprueft wird bei **jeder Anmeldung** - eine offene Sitzung
+  bleibt aber offen, bis sie getrennt wird. Das ist weniger als beim Dashboard, wo ein
+  Entzug binnen Sekunden wirkt, und bewusst offen gelassen.
+- **Das Recht ist eines fuer Administratoren.** Wer Dateien hochladen darf, kann ein Plugin
+  hochladen, und das laeuft beim naechsten Start als Code auf dem Node - mit den Rechten
+  des Wrappers, also mit Blick auf die `wrapper.json`. In jedem Serververzeichnis steht
+  ausserdem das Forwarding-Secret. Die Einsperrung haelt Versehen ab, keinen Angreifer mit
+  diesem Recht.
+- **Ein eigenes Passwort, nicht das des Dashboards.** Es geht im Klartext durch den Wrapper.
+  Waere es dasselbe, haette ein uebernommener Node danach die Dashboard-Zugaenge aller, die
+  sich bei ihm angemeldet haben.
+- **Passwoerter erzeugt der Master, niemand waehlt eines** - 24 Zeichen ohne 0, O, 1, I, l.
+  Deshalb SHA-256 wie bei den API-Tokens und kein Argon2. Mit selbst gewaehlten Passwoertern
+  waere das falsch; wer sie einfuehrt, muss das Verfahren mit aendern.
+- **`sftp` gibt es nur in der Konsole**, wie `api token`: Das Passwort erscheint einmal, und
+  anders als bei `acp` gibt es danach keinen erzwungenen Wechsel.
+- **Vor dem Schreiben wird die Datei vom Blob-Cache getrennt** (`UnsharingAccessor`).
+  Template-Dateien sind harte Links auf die Blobs. Wer eine an Ort und Stelle aendert,
+  aendert den Blob - und damit dieselbe Datei in jedem Server dieses Nodes, dessen Template
+  sie enthaelt. Unter Windows kennt Java die Link-Anzahl nicht; dort wird immer getrennt.
+  **Dasselbe Problem hat ein Gameserver, der seine eigene Konfiguration umschreibt** - das
+  ist nicht behoben.
+- **Template-Dateien werden bei jedem Start neu ausgerollt** (`TemplateCache.materialize`),
+  auch bei statischen Servern. Eine per SFTP geaenderte `server.properties` ist nach dem
+  naechsten Start wieder die aus dem Template, wenn das Template eine hat. Bestand hat, was
+  das Template nicht kennt: Welten, Plugin-Daten, eigene Plugins. Ob statische Server
+  vorhandene Dateien behalten sollen, ist eine offene Entscheidung.
+- **Nur SFTP.** Keine Shell, keine Befehle, keine Port-Weiterleitung, nur Passwort-Anmeldung.
+  Die Begruessung nennt weder Bibliothek noch Version.
+- **Der Host-Schluessel liegt in `secrets/sftp-host.key`** und bleibt ueber Neustarts
+  derselbe; sein Fingerprint steht beim Start im Log. Ein neuer bei jedem Start saehe fuer
+  jeden Client aus wie ein Angriff. `/wrapper/*/secrets/` steht in der `.gitignore`.
+- **`sftp servers` zeigt die Adresse des Nodes**, nicht die des Masters. Port und
+  Fingerprint des Host-Schluessels meldet der Wrapper bei der Anmeldung mit
+  (`RegisterRequest.sftp_port`, `sftp_host_key`) - der Master verbindet sich nie dorthin.
+- **Im Dashboard sieht jeder nur sich selbst** (Seite "Dateien", `SftpRoutes`,
+  `pages/Sftp.tsx`): die statischen Server, fuer die er `vibecloud.sftp.<server>` hat, mit
+  Adresse, Port, Benutzername und Host-Schluessel. Die Liste fragt
+  `SftpAccountService.mayAccess` - dasselbe Recht wie die Anmeldung, damit nichts
+  angezeigt wird, das dann nicht aufgeht. Ein eigenes Recht fuer die Seite gibt es nicht.
+- **Das eigene Passwort erzeugt man im Dashboard selbst**, und es steht einmal in einem
+  Dialog, der weggeklickt werden muss - wie das Node-Token. Das widerspricht "`sftp` nur in
+  der Konsole" nicht: Dort ging es um den Chat. Der Zugang allein oeffnet nichts, und mit
+  dem Start-Passwort des Dashboards geht es nicht (`SftpRoutes.user`). Fremde Zugaenge
+  verwaltet weiter die Konsole.
+- **"In WinSCP oeffnen" ist eine `sftp://`-Adresse ohne Passwort.** Sie oeffnet das
+  Programm, das dafuer eingetragen ist; ein Passwort darin stuende in Verlaeufen. Der
+  Host-Schluessel steht daneben, weil das Programm beim ersten Verbinden danach fragt -
+  ohne den Wert koennte man nur "ja" sagen und hoffen.
+- **Die angezeigte Adresse ist die, unter der der Master den Node kennt** (`addressOf`,
+  also `serverAddress` oder die Quell-IP). Hinter NAT oder in einem privaten Netz ist das
+  nicht die, die man von aussen braucht.
 
 # Wer online ist
 - **`OnlinePlayers` haelt das nur im Speicher.** Wer verbunden ist, ist kein dauerhafter
@@ -673,6 +951,9 @@ nativen Netty-Bibliotheken bei jedem Start (die Start-Skripte und die systemd-Un
 
 # Abhaengigkeitsrichtung (strikt)
 `protocol` + `common` -> `api` -> {`master`, `wrapper`, `platform/*`, `module-api`} -> `modules/*`
+
+`common/vibecloud-sftp` steht daneben: Es haengt von nichts im Projekt ab, und nur `master`
+und `wrapper` haengen davon ab.
 
 Ein Modul sieht **nur** `module-api` und `vibecloud-api`, niemals Master-Interna.
 

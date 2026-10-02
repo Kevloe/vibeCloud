@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { ApiError, openSocket, request, type Server, type Snapshot } from "../api";
 import { Button } from "../ui/Button";
+import { TextInput } from "../ui/Form";
 import { Badge, Card, Detail, PageHeader, StateDot } from "../ui/Layout";
 import { ConfirmModal } from "../ui/Modal";
 import { useToast } from "../ui/Toast";
@@ -9,7 +10,8 @@ import { useToast } from "../ui/Toast";
  * Ein Server mit seinem Log.
  *
  * Zustand und Spielerzahl kommen aus derselben Live-Verbindung wie die Uebersicht, das
- * Log aus {@code /ws/console/<server>}. Die letzten Zeilen schickt der Master beim
+ * Log aus {@code /ws/console/<server>}. Befehle gehen den anderen Weg ueber einen eigenen
+ * Aufruf - mitlesen und tippen sind zwei Rechte. Die letzten Zeilen schickt der Master beim
  * Verbinden mit - sonst stuende man vor einem leeren Fenster, bis der Server das
  * naechste Mal etwas sagt.
  */
@@ -22,6 +24,13 @@ export function ServerDetail({ name, onBack }: { name: string; onBack: () => voi
   const [follow, setFollow] = useState(true);
   const [ask, setAsk] = useState<"stop" | "kill" | null>(null);
   const box = useRef<HTMLDivElement>(null);
+
+  const [command, setCommand] = useState("");
+  const [sending, setSending] = useState(false);
+  // Was schon geschickt wurde - mit Pfeil hoch und runter wieder zu holen, wie in jeder
+  // Konsole. Nur fuer diese Seite; nach dem Verlassen ist es weg.
+  const [history, setHistory] = useState<string[]>([]);
+  const [historyIndex, setHistoryIndex] = useState<number | null>(null);
 
   async function load() {
     try {
@@ -125,6 +134,59 @@ export function ServerDetail({ name, onBack }: { name: string; onBack: () => voi
     }
   }
 
+  /**
+   * Schickt eine Zeile in die Konsole des Servers.
+   *
+   * Eine Antwort gibt es nicht: Was der Server daraus macht, steht gleich im Log
+   * darueber. Die eigene Zeile wird deshalb dort eingereiht - sonst saehe man die Antwort
+   * ohne die Frage.
+   */
+  async function send(event: FormEvent) {
+    event.preventDefault();
+    const line = command.trim();
+    if (!line || sending) {
+      return;
+    }
+    setSending(true);
+    try {
+      await request(`/api/v1/servers/${name}/command`, {
+        method: "POST",
+        body: { command: line },
+      });
+      setLines((previous) => [...previous, `> ${line}`].slice(-1000));
+      setHistory((previous) => [...previous.filter((entry) => entry !== line), line].slice(-50));
+      setHistoryIndex(null);
+      setCommand("");
+      setFollow(true);
+    } catch (exception) {
+      // Der Befehl bleibt im Feld stehen - nach einem Fehler will man ihn nicht neu tippen.
+      toast.error(exception instanceof ApiError ? exception.message : "Senden fehlgeschlagen");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  function browseHistory(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") {
+      return;
+    }
+    if (history.length === 0) {
+      return;
+    }
+    event.preventDefault();
+    const last = history.length - 1;
+    const next =
+      event.key === "ArrowUp"
+        ? historyIndex === null
+          ? last
+          : Math.max(0, historyIndex - 1)
+        : historyIndex === null || historyIndex >= last
+          ? null
+          : historyIndex + 1;
+    setHistoryIndex(next);
+    setCommand(next === null ? "" : history[next]);
+  }
+
   const state = live?.state ?? server?.state ?? "?";
   const players = live?.players ?? server?.players ?? 0;
 
@@ -203,6 +265,41 @@ export function ServerDetail({ name, onBack }: { name: string; onBack: () => voi
             <span className="text-text-faint">Warte auf Ausgabe ...</span>
           )}
         </div>
+
+        {/*
+          Die Eingabe steht unter dem Log und gehoert zum selben Kasten - wie in einer
+          Konsole. Sie braucht ein eigenes Recht (vibecloud.command.screen.send); fehlt
+          es, sagt der Master das beim ersten Versuch.
+        */}
+        <form onSubmit={send} className="flex items-center gap-2 border-t border-line p-3">
+          <span className="console select-none text-sm text-text-faint" aria-hidden="true">
+            &gt;
+          </span>
+          <TextInput
+            value={command}
+            onChange={(event) => {
+              setCommand(event.target.value);
+              setHistoryIndex(null);
+            }}
+            onKeyDown={browseHistory}
+            placeholder="Befehl für die Konsole des Servers, ohne Schrägstrich - z. B. say Hallo"
+            aria-label={`Befehl an ${name} schicken`}
+            autoComplete="off"
+            spellCheck={false}
+            maxLength={1000}
+            className="console text-xs"
+          />
+          <Button
+            type="submit"
+            variant="primary"
+            size="sm"
+            icon="send"
+            busy={sending}
+            disabled={!command.trim()}
+          >
+            Senden
+          </Button>
+        </form>
       </Card>
 
       <ConfirmModal

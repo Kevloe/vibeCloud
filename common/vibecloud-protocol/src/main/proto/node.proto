@@ -35,6 +35,11 @@ service NodeService {
 
   // Log eines beendeten DYNAMIC-Servers, gzip-komprimiert.
   rpc UploadServerLog(stream LogChunk) returns (Ack);
+
+  // SFTP-Anmeldung an einem statischen Server dieses Nodes pruefen. Der Wrapper nimmt die
+  // Verbindung an, entscheiden tut der Master: Nur er kennt Zugaenge und Rechte, und der
+  // Wrapper hat keinen Zugriff auf die Datenbank.
+  rpc AuthenticateSftp(SftpAuthRequest) returns (SftpAuthResponse);
 }
 
 // ---------------------------------------------------------------- Anmeldung
@@ -64,6 +69,15 @@ message RegisterRequest {
   // Hoechste seq, die dieser Wrapper je vergeben hat. Der Master antwortet mit dem
   // Stand, den er kennt, damit der Wrapper weiss, ab wo er nachspielen muss.
   uint64 highest_outbox_seq = 7;
+
+  // Port, auf dem dieser Node SFTP fuer seine statischen Server anbietet. 0 = aus.
+  // Nur zur Anzeige ('sftp servers') - der Master verbindet sich nie dorthin.
+  int32 sftp_port = 9;
+
+  // Fingerprint des SFTP-Host-Schluessels dieses Nodes (SHA256:...). Das Dashboard zeigt
+  // ihn neben der Adresse, damit die Rueckfrage des Clients beim ersten Verbinden
+  // beantwortet werden kann. Leer, wenn kein SFTP laeuft.
+  string sftp_host_key = 10;
 }
 
 message RegisterResponse {
@@ -77,6 +91,30 @@ message RegisterResponse {
 
   // Heartbeat-Intervall, das der Master erwartet.
   int32 heartbeat_interval_seconds = 4;
+}
+
+// ---------------------------------------------------------------- SFTP
+
+message SftpAuthRequest {
+  // Name des Zugangs - der Teil des SFTP-Benutzernamens vor dem letzten Punkt.
+  string username = 1;
+
+  // Der statische Server, in dessen Verzeichnis es gehen soll. Der Master prueft, dass er
+  // an genau den Node gebunden ist, der hier fragt.
+  string server_name = 2;
+
+  string password = 3;
+
+  // Adresse des SFTP-Clients, fuer das Protokoll.
+  string client_ip = 4;
+}
+
+message SftpAuthResponse {
+  bool allowed = 1;
+
+  // Grund einer Ablehnung - nur fuer das Log des Wrappers. Der Client erfaehrt ihn nicht:
+  // "falsches Passwort" und "kein Recht" sehen von aussen gleich aus.
+  string detail = 2;
 }
 
 // ---------------------------------------------------------------- Wrapper -> Master

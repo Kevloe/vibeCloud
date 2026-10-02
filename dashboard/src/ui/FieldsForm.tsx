@@ -35,6 +35,15 @@ const HINTS: Record<string, string> = {
   color: "MiniMessage-Farbe des Namens, zum Beispiel <red>",
   weight: "Höher schlägt niedriger bei geerbten Rechten.",
   chat_format: "Leer = Vorgabe der Cloud.",
+  "servers.portRangeStart": "Erster Port für Gameserver.",
+  "servers.portRangeEnd": "Letzter Port für Gameserver.",
+  "servers.proxyPort": "Hierauf verbinden sich Spieler - nie im Gameserver-Bereich.",
+  "servers.stopGraceSeconds": "Sekunden zwischen stop und dem harten Beenden.",
+  "servers.schedulerIntervalSeconds": "Takt, in dem die Cloud Server nachstartet.",
+  "servers.logRetentionDays": "So lange bleiben hochgeladene Logs auf dem Master.",
+  "grpc.heartbeatIntervalSeconds": "Abstand der Lebenszeichen eines Nodes.",
+  "grpc.heartbeatTimeoutSeconds": "Ohne Lebenszeichen gilt ein Node danach als ausgefallen.",
+  "grpc.maxMessageSizeMb": "Grenze je Nachricht zwischen Master und Wrapper.",
 };
 
 /**
@@ -49,11 +58,18 @@ export function FieldGrid({
   draft,
   current,
   onChange,
+  notes = {},
 }: {
   fields: EditableField[];
   draft: Record<string, string>;
   current: Record<string, string>;
   onChange: (name: string, value: string) => void;
+  /**
+   * Ein Hinweis, der zu genau diesem Datensatz gehoert und deshalb vor der allgemeinen
+   * Erklaerung steht - etwa "läuft noch mit 30" bei einer Einstellung, die erst nach dem
+   * Neustart gilt.
+   */
+  notes?: Record<string, string>;
 }) {
   return (
     <div className="grid gap-4 sm:grid-cols-2">
@@ -73,7 +89,7 @@ export function FieldGrid({
             hint={
               changed
                 ? `Vorher: ${current[field.name] || "(leer)"}`
-                : HINTS[field.name]
+                : (notes[field.name] ?? HINTS[field.name])
             }
           >
             {(props) =>

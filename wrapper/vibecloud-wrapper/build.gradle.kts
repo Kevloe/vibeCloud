@@ -7,6 +7,7 @@ plugins {
 dependencies {
     implementation(project(":common:vibecloud-api"))
     implementation(libs.snakeyaml)
+    implementation(project(":common:vibecloud-sftp"))
     runtimeOnly(libs.logback.classic)
 
     testImplementation(libs.grpc.inprocess)

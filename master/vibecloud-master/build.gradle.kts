@@ -7,6 +7,7 @@ plugins {
 dependencies {
     implementation(project(":common:vibecloud-api"))
     implementation(project(":modules:module-api"))
+    implementation(project(":common:vibecloud-sftp"))
 
     implementation(libs.grpc.services)
     implementation(libs.postgresql)
