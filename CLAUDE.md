@@ -748,6 +748,22 @@ Der Weg ist sicher, weil der Node-Kanal authentifiziert und fingerprint-gepinnt 
   ueberschrieben. Eigene Texte ueberleben ein Update, und neue Schluessel erscheinen
   nicht als Schluesselname im Spiel. Angehaengt wird flach in Punkt-Schreibweise
   (`tab.header: '...'`) - der Lader versteht beide Formen.
+- **Nach jedem Laden der Rechte geht die Befehlsliste neu an den Client**
+  (`player.updateCommands()` in `VibeCloudPaper.loadPlayer`). Paper schickt sie beim Join,
+  und da hat die Cloud noch nicht geantwortet - berechnet wird sie also mit den
+  Bukkit-Rechten. Ohne das neue Senden funktionierte `/gamemode` mit `*` zwar, wurde aber
+  weder vorgeschlagen noch als bekannt angezeigt; nach einem Rechte-Entzug blieb es
+  umgekehrt stehen. **Nicht im Spiel gesehen** - dafuer braucht es einen Client.
+- **F3+F4 haengt an der OP-Stufe, die der Client gemeldet bekommt**, nicht an einem Recht.
+  Der Server laesst den Wechsel mit `minecraft.command.gamemode` zu (am Server-Jar mit
+  `javap` geprueft: `handleChangeGameMode`), der Client oeffnet den Umschalter aber erst ab
+  Stufe 2. Wer das Recht hat, bekommt deshalb `sendOpLevel(2)` - eine Auskunft, kein
+  Operator-Status; geprueft wird weiter auf dem Server. **Stufe 4 gibt es nur beim vollen
+  Wildcard `*`** (`opLevelFor`, gefragt wird `CloudPermissions.has(uuid, "*")`): Wer allein
+  den Spielmodus wechseln darf, soll dem Client nicht als Voll-Operator erscheinen. Ein
+  einzelnes Verbot neben dem `*` aendert die Stufe nicht. Nach Weltwechsel und Respawn
+  meldet der Server die Stufe von sich aus neu, deshalb geht sie dort einen Tick spaeter
+  noch einmal hinaus. Echte Operatoren bleiben unberuehrt. **Nicht im Spiel gesehen.**
 
 # Befehle im Spiel
 - **Ein Weg, nicht zwei.** Der Proxy schickt die Zeile samt Spieler-UUID an den Master

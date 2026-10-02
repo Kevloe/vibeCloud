@@ -17,8 +17,10 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerChangedWorldEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.nio.file.Path;
@@ -36,6 +38,17 @@ import java.util.UUID;
  */
 public final class VibeCloudPaper extends JavaPlugin
         implements Listener, CloudConnection.CommandHandler {
+
+    /** Das Recht, an dem Paper den Wechsel ueber den Umschalter festmacht. */
+    private static final String GAMEMODE_PERMISSION = "minecraft.command.gamemode";
+
+    /** Ab Stufe 2 oeffnet der Client den Umschalter. */
+    private static final byte SWITCHER_OP_LEVEL = 2;
+
+    /** Das volle Wildcard - nur wer das hat, bekommt die hoechste Stufe gemeldet. */
+    private static final String WILDCARD = "*";
+
+    private static final byte FULL_OP_LEVEL = 4;
 
     private final MiniMessage miniMessage = MiniMessage.miniMessage();
     private PluginModuleChannel moduleChannel;
@@ -168,8 +181,79 @@ public final class VibeCloudPaper extends JavaPlugin
                         // Join-Event Rechte prueft, soll schon die Cloud befragen.
                         injector.inject(player);
                         display.apply(player);
+                        // Die Befehlsliste hat der Client schon beim Join bekommen -
+                        // berechnet mit den Bukkit-Rechten, bevor die Cloud geantwortet
+                        // hat. Ohne das neue Senden gehen /gamemode und Co. zwar, werden
+                        // aber weder vorgeschlagen noch als bekannt angezeigt.
+                        if (player.isOnline()) {
+                            player.updateCommands();
+                            sendOpLevel(player);
+                        }
                     });
                 });
+    }
+
+    /**
+     * Sagt dem Client, ob er den Spielmodus-Umschalter (F3+F4, F3+N) oeffnen darf.
+     *
+     * <p>Der Client entscheidet das selbst, an der OP-Stufe, die ihm der Server gemeldet
+     * hat - von Rechten weiss er nichts. Der Server dagegen laesst den Wechsel schon zu,
+     * wenn {@code minecraft.command.gamemode} gesetzt ist. Ohne diese Meldung darf ein
+     * Spieler also wechseln, bekommt den Umschalter aber nie zu sehen.
+     *
+     * <p>Das ist nur eine Auskunft an den Client und macht niemanden zum Operator:
+     * Geprueft wird weiter auf dem Server, bei jedem Wechsel. Echte Operatoren bleiben
+     * unberuehrt - ihre Stufe meldet der Server selbst.
+     */
+    private void sendOpLevel(Player player) {
+        if (player.isOp()) {
+            return;
+        }
+        player.sendOpLevel(opLevelFor(player));
+    }
+
+    /**
+     * Welche Stufe der Client gemeldet bekommt.
+     *
+     * <p>4 nur beim vollen Wildcard: Wer allein den Spielmodus wechseln darf, soll dem
+     * Client nicht als Voll-Operator erscheinen. Gefragt wird die Cloud direkt und nicht
+     * {@code player.hasPermission("*")} - auf die Abfrage {@code *} passt nur die Regel
+     * {@code *} selbst, und ein unbekannter Spieler bekommt ein klares Nein statt der
+     * Bukkit-Vorgabe.
+     *
+     * <p>Ein einzelnes Verbot neben dem Wildcard aendert die Stufe nicht. Sie ist nur
+     * Anzeige; das Verbot setzt der Server durch.
+     */
+    private byte opLevelFor(Player player) {
+        if (permissions.has(player.getUniqueId(), WILDCARD)) {
+            return FULL_OP_LEVEL;
+        }
+        return player.hasPermission(GAMEMODE_PERMISSION) ? SWITCHER_OP_LEVEL : (byte) 0;
+    }
+
+    /**
+     * Nach Weltwechsel und Respawn meldet der Server die OP-Stufe von sich aus neu - und
+     * damit wieder 0. Einen Tick spaeter, damit die eigene Meldung die letzte ist.
+     */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onWorldChange(PlayerChangedWorldEvent event) {
+        resendOpLevel(event.getPlayer());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onRespawn(PlayerRespawnEvent event) {
+        resendOpLevel(event.getPlayer());
+    }
+
+    private void resendOpLevel(Player player) {
+        if (connection == null) {
+            return;
+        }
+        Bukkit.getScheduler().runTask(this, () -> {
+            if (player.isOnline()) {
+                sendOpLevel(player);
+            }
+        });
     }
 
     private void kick(de.kevloe.vibecloud.protocol.KickPlayer command) {
