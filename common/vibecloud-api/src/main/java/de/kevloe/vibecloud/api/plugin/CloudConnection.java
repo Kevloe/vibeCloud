@@ -41,8 +41,6 @@ import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -56,6 +54,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p>Anmeldung in zwei Schritten: Das Einmal-Secret aus
  * {@code vibecloud-connection.json} wird gegen ein Sitzungs-Token eingeloest. Danach gilt
  * nur noch das Token - ein verbrauchtes Secret ist wertlos.
+ *
+ * <p><b>Muss mit Java 17 kompilieren.</b> Das Legacy-Plugin fuer Paper 1.16 bis 26.1
+ * baut diese Datei mit {@code --release 17} mit (siehe
+ * {@code platform/vibecloud-paper-legacy}). Keine virtuellen Threads, keine Sequenced
+ * Collections, kein Pattern-Matching-switch - der Build des Legacy-Plugins faellt sonst
+ * sofort um.
  */
 public final class CloudConnection implements AutoCloseable {
 
@@ -69,7 +73,6 @@ public final class CloudConnection implements AutoCloseable {
     private final ServerPlatform platform;
     private final int maxPlayers;
     private final CommandHandler handler;
-    private final ScheduledExecutorService scheduler;
     private final AtomicBoolean running = new AtomicBoolean(true);
 
     private ManagedChannel channel;
@@ -85,8 +88,6 @@ public final class CloudConnection implements AutoCloseable {
         this.platform = platform;
         this.maxPlayers = maxPlayers;
         this.handler = handler;
-        this.scheduler = Executors.newSingleThreadScheduledExecutor(
-                Thread.ofVirtual().name("cloud-connection").factory());
     }
 
     /** Liest {@code vibecloud-connection.json} aus dem Arbeitsverzeichnis des Servers. */
@@ -109,7 +110,11 @@ public final class CloudConnection implements AutoCloseable {
 
     /** Verbindet im Hintergrund und haelt die Verbindung. Blockiert nicht. */
     public void connectAsync() {
-        Thread.ofVirtual().name("cloud-connect").start(this::runForever);
+        // Ein gewoehnlicher Thread, kein virtueller: Es ist genau einer, er lebt so lange
+        // wie das Plugin, und virtuelle Threads gibt es erst ab Java 21.
+        Thread thread = new Thread(this::runForever, "cloud-connect");
+        thread.setDaemon(true);
+        thread.start();
     }
 
     private void runForever() {
@@ -132,6 +137,12 @@ public final class CloudConnection implements AutoCloseable {
     }
 
     private void connectOnce() throws IOException, InterruptedException {
+        // Den Kanal des letzten Versuchs schliessen. Sonst bleibt bei jedem Wiederverbinden
+        // einer offen liegen, bis der Garbage Collector ihn findet - und gRPC meldet das
+        // dann als ERROR ("was garbage collected without being shut down").
+        if (channel != null) {
+            channel.shutdownNow();
+        }
         channel = NettyChannelBuilder
                 .forAddress(file.masterHost, file.masterPort)
                 .sslContext(GrpcSslContexts.forClient()
@@ -434,7 +445,6 @@ public final class CloudConnection implements AutoCloseable {
                 // Stream war schon zu.
             }
         }
-        scheduler.close();
         if (channel != null) {
             channel.shutdownNow();
         }

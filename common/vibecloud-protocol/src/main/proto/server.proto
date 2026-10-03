@@ -43,6 +43,15 @@ message StartServer {
   // Gameserver jede Verbindung ab (PLAN.md Abschnitt 13). Der Wrapper schreibt es in die
   // passende Konfigurationsdatei der Plattform.
   string forwarding_secret = 11;
+
+  // Die aufgeloeste Minecraft-Version ("1.16.5", nie "latest"). Der Wrapper braucht sie,
+  // weil Paper das Velocity-Secret bis 1.18 in paper.yml liest und ab 1.19 in
+  // config/paper-global.yml. Leer, wenn die Gruppe ihr Jar selbst mitbringt.
+  string mc_version = 12;
+
+  // Mindestens diese Java-Hauptversion braucht der Server. Der Wrapper nimmt die
+  // kleinste eingetragene, die reicht. 0 = die Java-Version des Wrappers selbst.
+  int32 java_version = 13;
 }
 
 message StopServer {

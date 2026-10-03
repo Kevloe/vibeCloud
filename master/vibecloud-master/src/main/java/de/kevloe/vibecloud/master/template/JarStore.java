@@ -3,6 +3,7 @@ package de.kevloe.vibecloud.master.template;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import de.kevloe.vibecloud.api.server.ServerGroup;
+import de.kevloe.vibecloud.common.MinecraftVersion;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,6 +25,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 /**
  * Beschafft Server-Jars und legt sie zentral ab (PLAN.md Abschnitt 6).
@@ -48,6 +51,7 @@ public final class JarStore {
 
     private final Path directory;
     private final HttpClient http;
+    private final VersionCatalog catalog;
 
     /** Verhindert, dass zwei Gruppen dasselbe Jar gleichzeitig herunterladen. */
     private final Map<String, Object> locks = new ConcurrentHashMap<>();
@@ -58,8 +62,9 @@ public final class JarStore {
      */
     private final Map<String, String> latestStableCache = new ConcurrentHashMap<>();
 
-    public JarStore(Path directory) throws IOException {
+    public JarStore(Path directory, VersionCatalog catalog) throws IOException {
         this.directory = directory;
+        this.catalog = catalog;
         Files.createDirectories(directory);
         this.http = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(20))
@@ -68,36 +73,103 @@ public final class JarStore {
     }
 
     /**
-     * Besorgt das Jar einer Gruppe.
+     * Ein beschafftes Jar.
      *
-     * @return Pfad zum Jar, oder {@code null} wenn die Gruppe ihr Jar im Template mitbringt
+     * @param path        das Jar, oder {@code null} wenn es im Gruppen-Template liegt
+     * @param version     die aufgeloeste Version ("26.2" statt "latest"), leer wenn
+     *                    unbekannt - bei einem eigenen Jar weiss das nur der Betreiber
+     * @param javaMinimum Mindest-Java laut PaperMC-API, 0 wenn unbekannt
      */
-    public Path resolve(ServerGroup group) throws IOException, InterruptedException {
+    public record ResolvedJar(Path path, String version, int javaMinimum) {
+    }
+
+    /**
+     * Besorgt das Jar einer Gruppe - laedt es herunter, wenn es noch nicht da ist.
+     */
+    public ResolvedJar resolve(ServerGroup group) throws IOException, InterruptedException {
         String source = group.jarSource();
 
         if (source.equals("template")) {
             // Selbst gebaute Jars (Minestom, Forks) liegen im Gruppen-Template.
-            return null;
+            return new ResolvedJar(null, ownVersion(group), 0);
         }
         if (source.startsWith("custom:")) {
             String url = source.substring("custom:".length());
-            return downloadIfMissing(fileNameFromUrl(url), url, null);
+            return new ResolvedJar(downloadIfMissing(fileNameFromUrl(url), url, null),
+                    ownVersion(group), 0);
         }
 
-        String project = switch (source) {
+        String project = projectOf(source);
+        String version = group.mcVersion().equals("latest")
+                ? latestStableVersion(project)
+                : group.mcVersion();
+        Path jar = resolveFromPaperApi(project, version);
+        int javaMinimum = catalog.find(group.platform(), version)
+                .map(VersionCatalog.Version::javaMinimum)
+                .orElse(0);
+        return new ResolvedJar(jar, version, javaMinimum);
+    }
+
+    /**
+     * Laedt das Jar einer Gruppe im Hintergrund vor.
+     *
+     * <p>Nach dem Anlegen und nach einem Versionswechsel: Ohne das liefe der Download erst
+     * beim ersten Start, und der wartet dann eine Minute auf 50 MB. Ein Fehler hier ist
+     * kein Fehler der Aenderung - der Start versucht es ohnehin noch einmal.
+     */
+    public void prefetch(ServerGroup group) {
+        if (group.jarSource().equals("template")) {
+            return;
+        }
+        Thread.ofVirtual().name("jar-prefetch-" + group.name()).start(() -> {
+            try {
+                ResolvedJar jar = resolve(group);
+                LOG.info("Jar fuer Gruppe {} bereit: {}", group.name(),
+                        jar.path() == null ? "-" : jar.path().getFileName());
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+            } catch (IOException | RuntimeException exception) {
+                LOG.warn("Jar fuer Gruppe {} konnte nicht vorgeladen werden: {}",
+                        group.name(), exception.getMessage());
+            }
+        });
+    }
+
+    /**
+     * Liegt schon ein Jar dieser Version im Store?
+     *
+     * <p>Erkannt am Dateinamen der PaperMC-API ({@code paper-1.16.5-794.jar}). Der Build
+     * zaehlt nicht: Fuer die Anzeige "schon da" reicht irgendeiner - beim Start wird ohnehin
+     * der neueste geholt.
+     */
+    public boolean isDownloaded(String jarSource, String version) {
+        if (!jarSource.equals("paper") && !jarSource.equals("velocity")) {
+            return false;
+        }
+        Pattern name = Pattern.compile(Pattern.quote(jarSource) + "-" + Pattern.quote(version)
+                                       + "-\\d+\\.jar");
+        try (Stream<Path> files = Files.list(directory)) {
+            return files.anyMatch(file -> name.matcher(file.getFileName().toString()).matches());
+        } catch (IOException exception) {
+            return false;
+        }
+    }
+
+    /** Bei einem eigenen Jar nur, was als Release-Version in der Gruppe steht. */
+    private static String ownVersion(ServerGroup group) {
+        return MinecraftVersion.parse(group.mcVersion()).isPresent() ? group.mcVersion() : "";
+    }
+
+    private static String projectOf(String source) throws IOException {
+        return switch (source) {
             case "paper" -> "paper";
             case "velocity" -> "velocity";
             default -> throw new IOException("Unbekannte jar_source: " + source);
         };
-        return resolveFromPaperApi(project, group.mcVersion());
     }
 
-    private Path resolveFromPaperApi(String project, String version)
+    private Path resolveFromPaperApi(String project, String effectiveVersion)
             throws IOException, InterruptedException {
-
-        String effectiveVersion = version.equals("latest")
-                ? latestStableVersion(project)
-                : version;
 
         String api = FILL_API.formatted(project, effectiveVersion);
         HttpResponse<String> response = http.send(

@@ -3,7 +3,9 @@ package de.kevloe.vibecloud.common.tls;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.net.ssl.X509TrustManager;
+import javax.net.ssl.SSLEngine;
+import javax.net.ssl.X509ExtendedTrustManager;
+import java.net.Socket;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 
@@ -19,8 +21,20 @@ import java.security.cert.X509Certificate;
  *
  * <p>Liegt in {@code common}, weil Wrapper <b>und</b> Plugins denselben Master pruefen -
  * zwei Implementierungen wuerden irgendwann auseinanderlaufen.
+ *
+ * <h2>Warum {@link X509ExtendedTrustManager}</h2>
+ * Ein einfacher {@code X509TrustManager} wird von der TLS-Engine eingepackt, und die
+ * Verpackung prueft zusaetzlich den Hostnamen - gRPC verlangt das. Das Zertifikat des
+ * Masters lautet auf {@code vibecloud-master}, verbunden wird aber mit einer IP. Unter
+ * Java 17 und 21 (Netty mit OpenSSL) scheiterte daran jede Verbindung mit "No subject
+ * alternative names matching IP address"; unter Java 25 nahm Netty einen anderen Weg,
+ * deshalb fiel es erst mit dem Legacy-Plugin auf.
+ *
+ * <p>Die Hostnamen-Pruefung entfaellt hier bewusst: Der Fingerprint legt genau ein
+ * Zertifikat fest. Wer es vorlegt, ist der Master - unter welchem Namen er angesprochen
+ * wurde, beweist danach nichts mehr. <b>Muss mit Java 17 kompilieren</b> (Legacy-Plugin).
  */
-public final class FingerprintTrustManager implements X509TrustManager {
+public final class FingerprintTrustManager extends X509ExtendedTrustManager {
 
     private static final Logger LOG = LoggerFactory.getLogger(FingerprintTrustManager.class);
 
@@ -54,6 +68,33 @@ public final class FingerprintTrustManager implements X509TrustManager {
             throw new CertificateException("Fingerprint des Masters stimmt nicht");
         }
         LOG.debug("Master-Zertifikat bestaetigt ({})", actual);
+    }
+
+    // Die Varianten mit Socket und Engine sind die, die TLS wirklich aufruft. Sie pruefen
+    // dasselbe - und eben keinen Hostnamen.
+
+    @Override
+    public void checkServerTrusted(X509Certificate[] chain, String authType, Socket socket)
+            throws CertificateException {
+        checkServerTrusted(chain, authType);
+    }
+
+    @Override
+    public void checkServerTrusted(X509Certificate[] chain, String authType, SSLEngine engine)
+            throws CertificateException {
+        checkServerTrusted(chain, authType);
+    }
+
+    @Override
+    public void checkClientTrusted(X509Certificate[] chain, String authType, Socket socket)
+            throws CertificateException {
+        checkClientTrusted(chain, authType);
+    }
+
+    @Override
+    public void checkClientTrusted(X509Certificate[] chain, String authType, SSLEngine engine)
+            throws CertificateException {
+        checkClientTrusted(chain, authType);
     }
 
     @Override

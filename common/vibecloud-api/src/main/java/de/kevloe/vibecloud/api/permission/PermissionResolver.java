@@ -156,7 +156,9 @@ public final class PermissionResolver {
             }
         }
 
-        path.removeLast();
+        // Nicht removeLast(): Das gibt es erst ab Java 21, und diese Datei baut auch das
+        // Legacy-Plugin mit --release 17.
+        path.remove(path.size() - 1);
         onPath.remove(current);
         finished.add(current);
         return Optional.empty();

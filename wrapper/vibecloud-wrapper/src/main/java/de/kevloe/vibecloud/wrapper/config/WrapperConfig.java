@@ -48,6 +48,19 @@ public final class WrapperConfig {
      */
     public int stopGraceSeconds = 30;
 
+    /**
+     * Weitere Java-Installationen fuer Gameserver, je ein Pfad zum {@code java}-Programm
+     * oder zum Java-Verzeichnis ({@code JAVA_HOME}).
+     *
+     * <p>Paper 1.16 bis 1.20.4 laeuft nicht unter der Java 25 des Wrappers. Der Wrapper fragt
+     * jede eingetragene Installation beim Start selbst nach ihrer Version - eine Zuordnung
+     * "17 = /pfad" von Hand koennte falsch sein, und dann startete ein Server mit der
+     * falschen Java. Die eigene Java des Wrappers ist immer dabei.
+     *
+     * <p>Beispiel: {@code ["/usr/lib/jvm/temurin-17-jdk-amd64", "/usr/lib/jvm/temurin-21-jdk-amd64"]}
+     */
+    public java.util.List<String> javaRuntimes = new java.util.ArrayList<>();
+
     public Firewall firewall = new Firewall();
 
     public Sftp sftp = new Sftp();

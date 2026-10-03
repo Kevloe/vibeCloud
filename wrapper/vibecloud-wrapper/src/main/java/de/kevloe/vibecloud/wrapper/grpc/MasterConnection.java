@@ -194,6 +194,7 @@ public final class MasterConnection implements AutoCloseable {
                 .setHighestOutboxSeq(outbox.highestSeq())
                 .setSftpPort(sftpPort)
                 .setSftpHostKey(sftpHostKey)
+                .addAllJavaVersions(servers.javaVersions())
                 .build();
     }
 

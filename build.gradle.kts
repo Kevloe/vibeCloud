@@ -44,6 +44,9 @@ tasks.register("updateTestEnv") {
         ":modules:module-punishment" to "master/modules/module-punishment.jar",
         ":platform:vibecloud-paper"
             to "master/templates/global/server/plugins/vibecloud-paper.jar",
+        // Paper unter 26.2 bekommt statt des obigen dieses (TemplateStore).
+        ":platform:vibecloud-paper-legacy"
+            to "master/templates/global/server-legacy/plugins/vibecloud-paper-legacy.jar",
         ":platform:vibecloud-velocity"
             to "master/templates/global/proxy/plugins/vibecloud-velocity.jar",
     )

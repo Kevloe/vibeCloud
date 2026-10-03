@@ -16,7 +16,6 @@ import de.kevloe.vibecloud.protocol.NodeCommand;
 import de.kevloe.vibecloud.protocol.ServerPlatform;
 import de.kevloe.vibecloud.protocol.StartServer;
 import de.kevloe.vibecloud.protocol.StopServer;
-import de.kevloe.vibecloud.protocol.TemplateManifest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -91,10 +90,24 @@ public final class ServerService {
                                        + group.maxOnline() + ")");
         }
 
-        if (group.staticGroup()) {
-            return startStatic(group, active, actor);
+        // Vor der Node-Wahl: Erst das Jar sagt, welche Java der Server braucht - und damit,
+        // welcher Node ueberhaupt in Frage kommt.
+        TemplateStore.PreparedStart prepared;
+        try {
+            prepared = templates.buildManifest(group);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            return StartResult.failure("Vorbereitung unterbrochen");
+        } catch (Exception exception) {
+            LOG.error("Dateisatz fuer Gruppe {} konnte nicht zusammengestellt werden",
+                    group.name(), exception);
+            return StartResult.failure("Dateisatz nicht bereit: " + exception.getMessage());
         }
-        return startDynamic(group, actor);
+
+        if (group.staticGroup()) {
+            return startStatic(group, prepared, active, actor);
+        }
+        return startDynamic(group, prepared, actor);
     }
 
     /**
@@ -102,7 +115,8 @@ public final class ServerService {
      * laufende Bindung wird deren Node angesprochen; gibt es noch keine Bindung, wird
      * einmalig eine angelegt.
      */
-    private StartResult startStatic(ServerGroup group, List<CloudServer> active, String actor) {
+    private StartResult startStatic(ServerGroup group, TemplateStore.PreparedStart prepared,
+                                    List<CloudServer> active, String actor) {
         Set<String> running = active.stream().map(CloudServer::name).collect(Collectors.toSet());
 
         for (StaticBindingRepository.Binding binding : bindings.ofGroup(group.name())) {
@@ -119,7 +133,15 @@ public final class ServerService {
                         java.time.Instant.now(), 0, group.maxPlayers()));
                 continue;
             }
-            return dispatchStart(group, binding.serverName(), binding.node(), binding.port(), actor);
+            if (!nodes.hasJava(binding.node(), prepared.javaVersion())) {
+                // Auch hier nicht ausweichen. Die Abhilfe liegt auf genau diesem Node.
+                return StartResult.failure(binding.serverName() + " braucht Java "
+                        + prepared.javaVersion() + " oder neuer, Node " + binding.node()
+                        + " hat nur " + nodes.javaVersionsOf(binding.node())
+                        + " - in dessen wrapper.json unter javaRuntimes eintragen");
+            }
+            return dispatchStart(group, prepared, binding.serverName(), binding.node(),
+                    binding.port(), actor);
         }
 
         if (bindings.ofGroup(group.name()).size() >= group.maxOnline()) {
@@ -128,9 +150,9 @@ public final class ServerService {
         }
 
         // Neue Bindung: einmalig wie bei dynamischen Servern waehlen und festschreiben.
-        Optional<String> node = chooseNode(group);
+        Optional<String> node = chooseNode(group, prepared.javaVersion());
         if (node.isEmpty()) {
-            return StartResult.failure(noNodeReason(group));
+            return StartResult.failure(noNodeReason(group, prepared.javaVersion()));
         }
         Set<String> taken = new HashSet<>(registry.takenNames());
         bindings.all().forEach(binding -> taken.add(binding.serverName()));
@@ -138,33 +160,22 @@ public final class ServerService {
         String name = names.nextName(group, node.get(), taken);
         int port = choosePort(group, node.get());
         bindings.bind(name, group.name(), node.get(), port);
-        return dispatchStart(group, name, node.get(), port, actor);
+        return dispatchStart(group, prepared, name, node.get(), port, actor);
     }
 
-    private StartResult startDynamic(ServerGroup group, String actor) {
-        Optional<String> node = chooseNode(group);
+    private StartResult startDynamic(ServerGroup group, TemplateStore.PreparedStart prepared,
+                                     String actor) {
+        Optional<String> node = chooseNode(group, prepared.javaVersion());
         if (node.isEmpty()) {
-            return StartResult.failure(noNodeReason(group));
+            return StartResult.failure(noNodeReason(group, prepared.javaVersion()));
         }
         String name = names.nextName(group, node.get(), registry.takenNames());
         int port = choosePort(group, node.get());
-        return dispatchStart(group, name, node.get(), port, actor);
+        return dispatchStart(group, prepared, name, node.get(), port, actor);
     }
 
-    private StartResult dispatchStart(ServerGroup group, String name, String node, int port,
-                                      String actor) {
-        TemplateManifest manifest;
-        try {
-            manifest = templates.buildManifest(group);
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            return StartResult.failure("Vorbereitung unterbrochen");
-        } catch (Exception exception) {
-            LOG.error("Dateisatz fuer Gruppe {} konnte nicht zusammengestellt werden",
-                    group.name(), exception);
-            return StartResult.failure("Dateisatz nicht bereit: " + exception.getMessage());
-        }
-
+    private StartResult dispatchStart(ServerGroup group, TemplateStore.PreparedStart prepared,
+                                      String name, String node, int port, String actor) {
         CloudServer server = ServerRegistry.newServer(name, group, node, port);
         registry.put(server);
 
@@ -179,11 +190,13 @@ public final class ServerService {
                 .setPlatform(toProto(group))
                 .setPort(port)
                 .setMemoryMb(group.memoryMb())
-                .addAllJvmFlags(group.jvmFlags())
+                .addAllJvmFlags(prepared.jvmFlags())
                 .setStaticServer(group.staticGroup())
-                .setManifestId(manifest.getManifestId())
+                .setManifestId(prepared.manifest().getManifestId())
                 .setConnectSecret(secret)
-                .setForwardingSecret(forwardingSecret);
+                .setForwardingSecret(forwardingSecret)
+                .setMcVersion(prepared.mcVersion())
+                .setJavaVersion(prepared.javaVersion());
 
         boolean sent = nodes.send(node, NodeCommand.newBuilder()
                 .setCommandId(UUID.randomUUID().toString())
@@ -198,8 +211,10 @@ public final class ServerService {
         history.recordStart(name, group.name(), node);
         audit.record(actor, "server.start", name,
                 Map.of("group", group.name(), "node", node, "port", port));
-        LOG.info("{} wird auf Node {} gestartet (Port {}, {} MB)",
-                name, node, port, group.memoryMb());
+        LOG.info("{} wird auf Node {} gestartet (Port {}, {} MB{}{})",
+                name, node, port, group.memoryMb(),
+                prepared.mcVersion().isEmpty() ? "" : ", " + prepared.mcVersion(),
+                prepared.javaVersion() > 0 ? ", Java " + prepared.javaVersion() + "+" : "");
         return StartResult.success(name, node, port);
     }
 
@@ -271,7 +286,7 @@ public final class ServerService {
      * Waehlt einen Node fuer einen neuen Server: erlaubte Nodes der Gruppe, verbunden,
      * genug freier Arbeitsspeicher - und darunter der am wenigsten belegte.
      */
-    private Optional<String> chooseNode(ServerGroup group) {
+    private Optional<String> chooseNode(ServerGroup group, int javaVersion) {
         Map<String, ServerGroup> allGroups = groups.findAll().stream()
                 .collect(Collectors.toMap(ServerGroup::name, Function.identity()));
 
@@ -281,6 +296,9 @@ public final class ServerService {
                 .filter(NodeInfo::enabled)
                 .filter(NodeInfo::connected)
                 .filter(node -> group.allowsNode(node.name()))
+                // Ein Node ohne passende Java wuerde den Server starten und sofort
+                // verlieren - und der Scheduler versuchte es dort jede Runde wieder.
+                .filter(node -> nodes.hasJava(node.name(), javaVersion))
                 // Zwei Proxys auf einem Node wuerden sich um Port 25565 streiten,
                 // und der zweite wuerde endlos neu starten.
                 .filter(node -> !isProxy || !hasProxy(node.name()))
@@ -303,7 +321,7 @@ public final class ServerService {
     }
 
     /** Erklaert, warum kein Node passt - sonst steht da nur "geht nicht". */
-    private String noNodeReason(ServerGroup group) {
+    private String noNodeReason(ServerGroup group, int javaVersion) {
         List<NodeInfo> all = nodes.listAll();
         if (all.isEmpty()) {
             return "Es ist kein Node angelegt (node add <name>)";
@@ -315,6 +333,12 @@ public final class ServerService {
             && all.stream().filter(NodeInfo::connected)
                     .noneMatch(node -> group.allowsNode(node.name()))) {
             return "Keiner der erlaubten Nodes " + group.allowedNodes() + " ist verbunden";
+        }
+        if (all.stream().filter(NodeInfo::connected)
+                .filter(node -> group.allowsNode(node.name()))
+                .noneMatch(node -> nodes.hasJava(node.name(), javaVersion))) {
+            return "Kein verbundener Node hat Java " + javaVersion + " oder neuer - auf einem "
+                   + "Node installieren und in dessen wrapper.json unter javaRuntimes eintragen";
         }
         if (group.platform() == ServerPlatformType.VELOCITY) {
             return "Auf jedem erlaubten Node laeuft schon ein Proxy (Port "

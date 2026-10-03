@@ -166,7 +166,11 @@ public final class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
                 skew,
                 serverAddress,
                 request.getSftpPort(),
-                request.getSftpHostKey()));
+                request.getSftpHostKey(),
+                request.getJavaVersionsList()));
+        if (!request.getJavaVersionsList().isEmpty()) {
+            LOG.info("{} hat Java {}", node, request.getJavaVersionsList());
+        }
 
         audit.record("SYSTEM", "node.registered", node,
                 Map.of("apiVersion", request.getApiVersion(),

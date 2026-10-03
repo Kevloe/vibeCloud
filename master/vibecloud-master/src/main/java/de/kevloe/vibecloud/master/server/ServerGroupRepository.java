@@ -28,11 +28,51 @@ public final class ServerGroupRepository {
 
     private final Database database;
 
+    /**
+     * Prueft Version und Jar-Quelle einer Gruppe, bevor sie gespeichert wird.
+     *
+     * <p>Hier und nicht in Konsole und Schnittstelle: Beide Wege laufen durch
+     * {@link #create} und {@link #updateField}. Zwei Pruefungen waeren zwei Meinungen
+     * darueber, welche Versionen es gibt.
+     */
+    public interface VersionCheck {
+
+        /** @return Fehlermeldung, oder leer wenn die Gruppe so gespeichert werden darf */
+        Optional<String> problemWith(ServerGroup group);
+
+        /** Nach dem Speichern - etwa um das Jar schon herunterzuladen. */
+        void accepted(ServerGroup group);
+    }
+
+    private volatile VersionCheck versionCheck = new VersionCheck() {
+        @Override
+        public Optional<String> problemWith(ServerGroup group) {
+            return Optional.empty();
+        }
+
+        @Override
+        public void accepted(ServerGroup group) {
+        }
+    };
+
     public ServerGroupRepository(Database database) {
         this.database = database;
     }
 
+    public void setVersionCheck(VersionCheck check) {
+        this.versionCheck = check;
+    }
+
+    /**
+     * @throws IllegalArgumentException wenn die Version nicht passt - dann ist nichts
+     *                                  angelegt
+     * @throws IllegalStateException    bei einem Datenbankfehler
+     */
     public void create(ServerGroup group) {
+        Optional<String> problem = versionCheck.problemWith(group);
+        if (problem.isPresent()) {
+            throw new IllegalArgumentException(problem.get());
+        }
         String sql = """
                 INSERT INTO server_groups (
                     name, platform, static_group, min_online, max_online, max_players,
@@ -69,6 +109,7 @@ public final class ServerGroupRepository {
                     "Gruppe " + group.name() + " konnte nicht angelegt werden: "
                     + exception.getMessage(), exception);
         }
+        versionCheck.accepted(group);
     }
 
     public Optional<ServerGroup> find(String name) {
@@ -127,7 +168,10 @@ public final class ServerGroupRepository {
     public static List<String> valuesFor(String field) {
         return switch (field.toLowerCase(Locale.ROOT)) {
             case "fallback", "maintenance" -> List.of("true", "false");
-            case "mcversion", "mc_version" -> List.of("latest", "26.2", "26.1");
+            // Die echte Liste haengt an der Plattform und kommt aus dem VersionCatalog -
+            // das hier ist nur, was immer geht.
+            case "mcversion", "mc_version" -> List.of("latest");
+            case "jarsource", "jar_source" -> List.of("paper", "velocity", "template");
             case "memory", "memory_mb" -> List.of("512", "1024", "2048", "4096");
             case "min_online", "minonline", "max_online", "maxonline" ->
                     List.of("0", "1", "2", "3");
@@ -203,6 +247,7 @@ public final class ServerGroupRepository {
         boolean numeric = List.of("min_online", "max_online", "max_players", "memory_mb",
                 "start_percent", "idle_timeout", "join_priority", "priority").contains(column);
         boolean bool = List.of("fallback", "maintenance").contains(column);
+        boolean version = List.of("mc_version", "jar_source").contains(column);
 
         String sql = "UPDATE server_groups SET " + column + " = ?"
                      + (numeric ? "::integer" : bool ? "::boolean" : "") + " WHERE name = ?";
@@ -218,8 +263,19 @@ public final class ServerGroupRepository {
                 }
                 // Die Gegenprobe: dieselbe Zeile so lesen, wie es danach jeder tut. Wirft
                 // der Konstruktor, wird die Aenderung zurueckgenommen.
-                requireReadable(connection, group);
+                ServerGroup changed = requireReadable(connection, group);
+                // Die Version wird an der fertigen Gruppe geprueft: Ob 1.16.5 geht, haengt
+                // an Plattform und jar_source, die in anderen Feldern stehen.
+                if (version && changed != null) {
+                    Optional<String> problem = versionCheck.problemWith(changed);
+                    if (problem.isPresent()) {
+                        throw new IllegalArgumentException(problem.get());
+                    }
+                }
                 connection.commit();
+                if (version && changed != null) {
+                    versionCheck.accepted(changed);
+                }
                 return true;
             } catch (SQLException | RuntimeException exception) {
                 connection.rollback();
@@ -233,15 +289,13 @@ public final class ServerGroupRepository {
         }
     }
 
-    private static void requireReadable(Connection connection, String group)
+    private static ServerGroup requireReadable(Connection connection, String group)
             throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(
                 "SELECT * FROM server_groups WHERE name = ?")) {
             statement.setString(1, group);
             try (ResultSet result = statement.executeQuery()) {
-                if (result.next()) {
-                    read(result);
-                }
+                return result.next() ? read(result) : null;
             }
         }
     }

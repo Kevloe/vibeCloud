@@ -114,7 +114,7 @@ export function Nodes() {
             }
           />
         ) : (
-          <Table columns={["Name", "Zustand", "Server", "Speicher", "Zuletzt", ""]}>
+          <Table columns={["Name", "Zustand", "Server", "Speicher", "Java", "Zuletzt", ""]}>
             {nodes.map((node) => (
               <Row key={node.name}>
                 <Cell className="font-medium text-text">{node.name}</Cell>
@@ -130,6 +130,10 @@ export function Nodes() {
                 <Cell className="tabular-nums">{node.servers}</Cell>
                 <Cell className="tabular-nums">
                   {(node.maxMemoryMb / 1024).toFixed(0)} GB
+                </Cell>
+                {/* Welche Gruppen-Versionen hier starten koennen, haengt daran. */}
+                <Cell className="tabular-nums">
+                  {node.java.length > 0 ? node.java.join(", ") : "–"}
                 </Cell>
                 <Cell className="text-text-faint">{node.lastSeen || "nie"}</Cell>
                 <Cell align="right">

@@ -1,5 +1,6 @@
 package de.kevloe.vibecloud.wrapper.server;
 
+import de.kevloe.vibecloud.common.MinecraftVersion;
 import de.kevloe.vibecloud.protocol.ServerPlatform;
 import de.kevloe.vibecloud.protocol.StartServer;
 import org.slf4j.Logger;
@@ -76,20 +77,51 @@ public final class ServerConfigurator {
             values.store(out, "von vibeCloud verwaltet - Port und online-mode nicht aendern");
         }
 
-        writePaperGlobal(request, directory);
+        if (usesPaperYml(request.getMcVersion())) {
+            writeVelocityBlock(request, directory, "paper.yml", "settings", "velocity-support");
+        } else {
+            writeVelocityBlock(request, directory, "config/paper-global.yml", "proxies",
+                    "velocity");
+        }
+    }
+
+    /** Ab hier gibt es {@code config/paper-global.yml}. */
+    private static final MinecraftVersion PAPER_GLOBAL_SINCE = MinecraftVersion.of("1.19");
+
+    /**
+     * Ob das Forwarding noch in {@code paper.yml} steht.
+     *
+     * <p>Bis 1.18 lag die ganze Paper-Konfiguration in einer Datei, und das Secret unter
+     * {@code settings.velocity-support}. Ein Block in {@code paper-global.yml} wuerde dort
+     * still ignoriert - der Server lehnte dann jeden Spieler vom Proxy ab.
+     *
+     * <p>Ohne Version - ein eigenes Jar, zu dem die Gruppe nichts sagt - gilt das aktuelle
+     * Format.
+     */
+    static boolean usesPaperYml(String mcVersion) {
+        return MinecraftVersion.parse(mcVersion)
+                .map(version -> version.compareTo(PAPER_GLOBAL_SINCE) < 0)
+                .orElse(false);
     }
 
     /**
-     * Ergaenzt den {@code proxies.velocity}-Block in {@code config/paper-global.yml}.
+     * Setzt den Velocity-Block in der Paper-Konfiguration - {@code proxies.velocity} in
+     * {@code config/paper-global.yml}, bis 1.18 {@code settings.velocity-support} in
+     * {@code paper.yml}. Der Inhalt ist in beiden Formaten derselbe.
      *
      * <p>Bewusst nur dieser Block: Die Datei wird geladen, der Block gesetzt und wieder
      * geschrieben. Kommentare gehen dabei verloren - deshalb gehoeren eigene Einstellungen
      * ins Template und nicht in eine Datei, die die Cloud anfasst.
      */
     @SuppressWarnings("unchecked")
-    private static void writePaperGlobal(StartServer request, Path directory) throws IOException {
-        Path file = directory.resolve("config/paper-global.yml");
-        Files.createDirectories(file.getParent());
+    private static void writeVelocityBlock(StartServer request, Path directory, String fileName,
+                                           String parentKey, String blockKey)
+            throws IOException {
+        Path file = directory.resolve(fileName);
+        Path parentDirectory = file.getParent();
+        if (parentDirectory != null) {
+            Files.createDirectories(parentDirectory);
+        }
 
         Map<String, Object> root = new LinkedHashMap<>();
         if (Files.exists(file)) {
@@ -99,12 +131,12 @@ public final class ServerConfigurator {
                     map.forEach((key, value) -> root.put(String.valueOf(key), value));
                 }
             } catch (RuntimeException exception) {
-                LOG.warn("paper-global.yml von {} war nicht lesbar und wird neu geschrieben: {}",
-                        request.getServerName(), exception.getMessage());
+                LOG.warn("{} von {} war nicht lesbar und wird neu geschrieben: {}",
+                        fileName, request.getServerName(), exception.getMessage());
             }
         }
 
-        Map<String, Object> proxies = root.get("proxies") instanceof Map<?, ?> existing
+        Map<String, Object> parent = root.get(parentKey) instanceof Map<?, ?> existing
                 ? new LinkedHashMap<>((Map<String, Object>) existing)
                 : new LinkedHashMap<>();
 
@@ -114,8 +146,8 @@ public final class ServerConfigurator {
         // das ist etwas anderes als online-mode in der server.properties.
         velocity.put("online-mode", true);
         velocity.put("secret", request.getForwardingSecret());
-        proxies.put("velocity", velocity);
-        root.put("proxies", proxies);
+        parent.put(blockKey, velocity);
+        root.put(parentKey, parent);
 
         DumperOptions options = new DumperOptions();
         options.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);

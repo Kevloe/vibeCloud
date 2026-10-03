@@ -28,6 +28,8 @@ include(
     ":wrapper:vibecloud-wrapper",
     ":platform:vibecloud-velocity",
     ":platform:vibecloud-paper",
+    // Dasselbe fuer Paper 1.16 bis 26.1, gebaut fuer Java 17.
+    ":platform:vibecloud-paper-legacy",
     ":platform:vibecloud-minestom",
     ":modules:module-api",
     ":modules:module-punishment",

@@ -19,3 +19,10 @@ protobuf {
         all().configureEach { plugins { create("grpc") } }
     }
 }
+
+// Java 17 statt der Projekt-Version: Das Legacy-Plugin fuer Paper 1.16 bis 26.1 laeuft
+// auf Java 17 und packt dieses Jar mit ein. Der generierte Code ist ohnehin Java 8 - an
+// Master und Wrapper aendert das nichts.
+tasks.withType<JavaCompile>().configureEach {
+    options.release = 17
+}

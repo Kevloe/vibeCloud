@@ -47,6 +47,7 @@ final class AdminRoutes {
     private static final Logger LOG = LoggerFactory.getLogger(AdminRoutes.class);
     private static final Gson GSON = new Gson();
 
+    private static final String READ = "cloud.read";
     private static final String WRITE = "cloud.write";
 
     private final ApiAuth auth;
@@ -59,12 +60,21 @@ final class AdminRoutes {
     private final AuditLog audit;
     private final Path modulesDirectory;
     private final MaintenanceSwitch maintenance;
+    private final de.kevloe.vibecloud.master.template.VersionCatalog versions;
+    private final de.kevloe.vibecloud.master.template.JarStore jars;
+    private final de.kevloe.vibecloud.master.node.NodeRegistry liveNodes;
 
     AdminRoutes(ApiAuth auth, ServerGroupRepository groups, ServerRegistry servers,
                 NodeRepository nodes, RankRepository ranks, PermissionService permissions,
                 ModuleManager modules, AuditLog audit, Path modulesDirectory,
-                MaintenanceSwitch maintenance) {
+                MaintenanceSwitch maintenance,
+                de.kevloe.vibecloud.master.template.VersionCatalog versions,
+                de.kevloe.vibecloud.master.template.JarStore jars,
+                de.kevloe.vibecloud.master.node.NodeRegistry liveNodes) {
         this.maintenance = maintenance;
+        this.versions = versions;
+        this.jars = jars;
+        this.liveNodes = liveNodes;
         this.auth = auth;
         this.groups = groups;
         this.servers = servers;
@@ -80,6 +90,7 @@ final class AdminRoutes {
         routes
                 // Gruppen
                 .get("/api/v1/groups/fields", this::groupFields)
+                .get("/api/v1/groups/versions", this::groupVersions)
                 .post("/api/v1/groups", this::createGroup)
                 .patch("/api/v1/groups/{name}", this::editGroup)
                 .delete("/api/v1/groups/{name}", this::deleteGroup)
@@ -118,6 +129,54 @@ final class AdminRoutes {
         }).toList());
     }
 
+    /**
+     * Die waehlbaren Versionen einer Plattform - dasselbe wie {@code group versions}, mit
+     * dessen Recht.
+     *
+     * <p>Die Java der verbundenen Nodes kommt mit: Die Oberflaeche soll schon beim Waehlen
+     * sagen, dass 1.16.5 auf keinem Node starten kann, nicht erst beim ersten Start.
+     */
+    private void groupVersions(Context context) {
+        if (!auth.require(context, READ, "vibecloud.command.group.versions")) {
+            return;
+        }
+        ServerPlatformType platform;
+        try {
+            platform = ServerPlatformType.valueOf(
+                    Optional.ofNullable(context.queryParam("platform")).orElse("PAPER")
+                            .toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException exception) {
+            fail(context, HttpStatus.BAD_REQUEST,
+                    "platform muss PAPER, VELOCITY oder MINESTOM sein");
+            return;
+        }
+        String jarSource = platform == ServerPlatformType.VELOCITY ? "velocity" : "paper";
+        var available = versions.versions(platform);
+
+        Map<String, Object> answer = new LinkedHashMap<>();
+        answer.put("platform", platform.name());
+        // Bei MINESTOM gibt es nichts zu waehlen - das Jar liegt im Template.
+        answer.put("selectable", platform != ServerPlatformType.MINESTOM);
+        answer.put("reachable", platform == ServerPlatformType.MINESTOM || !available.isEmpty());
+        answer.put("latestJava",
+                de.kevloe.vibecloud.master.template.VersionCatalog.MODERN_PLUGIN_JAVA);
+        answer.put("versions", available.stream().map(version -> {
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("id", version.id());
+            entry.put("java", version.java());
+            entry.put("legacy", version.legacy());
+            entry.put("supported", version.supported());
+            entry.put("downloaded", jars.isDownloaded(jarSource, version.id()));
+            return entry;
+        }).toList());
+        answer.put("nodes", liveNodes.listAll().stream()
+                .filter(node -> node.connected())
+                .map(node -> Map.of("name", node.name(),
+                        "java", liveNodes.javaVersionsOf(node.name())))
+                .toList());
+        context.json(answer);
+    }
+
     private void createGroup(Context context) {
         if (!auth.require(context, WRITE, "vibecloud.command.group.create")) {
             return;
@@ -144,14 +203,21 @@ final class AdminRoutes {
         }
 
         String template = Optional.ofNullable(text(body, "template")).orElse(name);
+        ServerGroup group = ServerGroup.defaults(name, type, template);
+        String version = text(body, "version");
+        if (version != null && !version.isBlank()) {
+            group = group.withMcVersion(version.trim());
+        }
         try {
-            groups.create(ServerGroup.defaults(name, type, template));
+            // Prueft auch die Version - dieselbe Stelle wie group create in der Konsole.
+            groups.create(group);
         } catch (RuntimeException exception) {
             fail(context, HttpStatus.BAD_REQUEST, exception.getMessage());
             return;
         }
         audit.record(actor(context), "group.created", name,
-                Map.of("platform", type.name(), "template", template));
+                Map.of("platform", type.name(), "template", template,
+                        "version", group.mcVersion()));
         LOG.info("Gruppe {} ueber die Schnittstelle angelegt ({})", name, type);
 
         context.status(HttpStatus.CREATED).json(Map.of("name", name));

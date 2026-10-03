@@ -179,8 +179,36 @@ export type Node = {
   connected: boolean;
   enabled: boolean;
   maxMemoryMb: number;
+  /** Java-Hauptversionen des Nodes, wie sein Wrapper sie gemeldet hat. Leer = offline. */
+  java: number[];
   servers: number;
   lastSeen: string;
+};
+
+/** Eine waehlbare Server-Version, wie {@code group versions} sie zeigt. */
+export type ServerVersion = {
+  id: string;
+  /** Mindest-Java fuer einen Server dieser Version - inklusive Cloud-Plugin. */
+  java: number;
+  /** Bekommt das Legacy-Plugin (Paper unter 26.2). */
+  legacy: boolean;
+  /** Von PaperMC noch gepflegt. */
+  supported: boolean;
+  /** Das Jar liegt schon auf dem Master. */
+  downloaded: boolean;
+};
+
+export type VersionList = {
+  platform: string;
+  /** Bei MINESTOM gibt es nichts zu waehlen - das Jar liegt im Template. */
+  selectable: boolean;
+  /** Ob die PaperMC-API erreichbar war. */
+  reachable: boolean;
+  /** Was "latest" an Java braucht. */
+  latestJava: number;
+  versions: ServerVersion[];
+  /** Verbundene Nodes mit ihren Java-Versionen. */
+  nodes: Array<{ name: string; java: number[] }>;
 };
 
 export type Rank = {

@@ -114,6 +114,18 @@ verbindliche Quelle** fuer Architektur und Entscheidungen — bei Widerspruch gi
   die Cloud aus einem Template gestartet hat - der Befehl stand danach in seinem Log.
   **Nicht** gesehen: das Eingabefeld im Browser (die Erweiterung war nicht verbunden) und
   ein echter Paper-Server.
+- Mehrere Server-Versionen: Paper ab 1.16 je Gruppe waehlbar, in der Konsole
+  (`group create <name> <plattform> [version] [template]`, `group versions`,
+  `group edit ... mc_version`) und im Dashboard (Auswahl beim Anlegen, Vorschlaege beim
+  Bearbeiten, Java-Spalte bei den Nodes). Liste und Mindest-Java aus der PaperMC-API
+  (`VersionCatalog`), das Jar wird nach dem Speichern geladen. Unter 26.2 das neue
+  Legacy-Plugin (`platform/vibecloud-paper-legacy`, Java 17), Java je Node ueber
+  `javaRuntimes` in der wrapper.json. Dabei gefunden und behoben: Plugins kamen unter
+  Java 17/21 nicht durch TLS (`FingerprintTrustManager`), und `CloudConnection` liess bei
+  jedem Wiederverbinden einen gRPC-Kanal offen. 355 Tests gruen. Durchgespielt in einer
+  Wegwerf-Umgebung: 1.16.1, 1.16.5, 1.20.4, 1.21.4 und 26.2 von der Cloud gestartet, jedes
+  Plugin am Master angemeldet, eine Gruppe im Browser angelegt. Begruendungen unter
+  "Mehrere Server-Versionen".
 - Offen in M7: `/acp` ist noch nicht im Spiel getestet, und die Online-Liste ist ohne
   Spieler nie gefuellt gesehen worden. Das Dashboard ist am Breitbild geprueft,
   **nicht am Telefon** - die Schublade der Seitenleiste unter 1024 px hat nie jemand
@@ -555,6 +567,106 @@ Der Weg ist sicher, weil der Node-Kanal authentifiziert und fingerprint-gepinnt 
   als Vorlage (`defaults`) und was das JAR mitbringt (`bundled`). Ohne das Dritte saehe
   niemand, welcher Text ein eigener ist, und koennte ihn nicht zuruecksetzen.
 
+# Mehrere Server-Versionen
+- **Die Version gehoert zur Gruppe** (`mc_version`), wie bisher. Neu ist, dass die Cloud
+  weiss, welche es gibt und was jede braucht: `VersionCatalog` fragt
+  `fill.papermc.io/v3/projects/<projekt>/versions` - ein Aufruf liefert alle Versionen samt
+  Mindest-Java. Eine eigene Liste im Code waere mit der naechsten Paper-Version veraltet.
+  Zwischengespeichert eine Stunde; die Tab-Vervollstaendigung liest nur den Zwischenspeicher,
+  ein Tastendruck wartet nicht auf PaperMC.
+- **Waehlbar: Paper ab 1.16, Velocity ab 4.2, nur Releases.** Darunter gibt es kein
+  Cloud-Plugin; ein Server ohne Plugin waere nur scheinbar Teil der Cloud. `-rc`, `-pre` und
+  `SNAPSHOT` sind nicht waehlbar - aus demselben Grund, aus dem `latest` nur stabile Builds
+  nimmt.
+- **Geprueft wird an einer Stelle**: `ServerGroupRepository.VersionCheck`, aufgerufen von
+  `create` und von `updateField` bei `mc_version`/`jar_source`. Konsole und REST laufen beide
+  dort durch. Geprueft wird die fertige Gruppe, nicht das Feld - ob 1.16.5 geht, haengt an
+  Plattform und `jar_source`. Ein eigenes Jar (`template`, `custom:`) wird nicht geprueft.
+- **Ohne Internet wird nur die Form geprueft**, die Gruppe aber gespeichert. Sonst liesse
+  sich ohne Verbindung zu PaperMC keine Gruppe mehr anlegen; der Fehler kaeme beim Download
+  ohnehin.
+- **Das Jar wird nach dem Speichern geladen** (`JarStore.prefetch`), nicht erst beim ersten
+  Start - sonst wartet der auf 50 MB. Ein Fehler dabei ist kein Fehler der Aenderung, der
+  Start versucht es noch einmal.
+- **`group create <name> <plattform> [version] [template]`** - die Version steht vor dem
+  Template. Bisher stand dort das Template; wer die alte Reihenfolge tippt, bekommt
+  "keine Release-Version" und den Hinweis auf die neue. Template-Namen enthalten keinen
+  Punkt, Versionen schon - daran erkennt der Hinweis den Fall.
+
+## Java
+- **Gebraucht wird das Hoehere aus API und Plugin** (`VersionCatalog.requiredJava`):
+  1.16.5 nennt Java 8, das Legacy-Plugin braucht 17 - also 17. 26.x braucht 25.
+- **Der Betreiber installiert die Java selbst** und traegt sie in die wrapper.json ein
+  (`javaRuntimes`, Pfad zum Programm oder zum Java-Verzeichnis). Der Wrapper fragt jede
+  Installation nach ihrer Version (`-XshowSettings:properties`); eine Zuordnung "17 = Pfad"
+  von Hand koennte falsch sein. Die eigene Java des Wrappers ist immer dabei.
+- **Gewaehlt wird die kleinste passende**, nicht die neueste. Alte Server brechen eher an
+  einer zu neuen Java, als dass sie von ihr profitieren.
+- **Der Master startet nur auf einem Node mit passender Java** (`NodeRegistry.hasJava`,
+  `RegisterRequest.java_versions`). Sonst startete der Scheduler dort jede Runde einen
+  Server, der sofort wieder ausgeht. Ein Wrapper, der nichts meldet, ist aelter und startet
+  alles mit seiner Java - der wird nicht ausgeschlossen. Ein statischer Server weicht auch
+  hier nicht aus; die Meldung nennt den Node.
+- **Paper 1.16 und 1.17 weigern sich ueber Java 16** ("Only up to Java 16 is supported").
+  `-DPaper.IgnoreJavaVersion=true` kommt fuer Legacy-Versionen unter 1.18 automatisch dazu.
+  Mit 1.16.1 und 1.16.5 unter Temurin 17 geprueft.
+- **`--enable-native-access` nur ab Java 22.** Java 8 und 16 starten mit dem Flag gar nicht.
+
+## Das Legacy-Plugin
+- **Unter 26.2 bekommt ein Server `vibecloud-paper-legacy.jar`** statt `vibecloud-paper.jar`
+  (`TemplateStore`): Das aktuelle ist fuer Java 25 und `api-version: 26.2` gebaut, schon
+  26.1 lehnt es ab. Es liegt unter `templates/global/server-legacy/plugins/`; aus
+  `global/server` faellt `plugins/vibecloud-paper.jar` dafuer heraus.
+- **Keine zweite Verbindung und keine zweite Rechte-Auswertung.** `CloudConnection`,
+  `CloudPermissions`, die Rechte-Auswertung, `CloudPermissible`, `PermissibleInjector` und
+  `RankTeams` sind **dieselben Dateien**; der Build kopiert sie und kompiliert sie mit
+  `--release 17` noch einmal. **Diese Dateien muessen deshalb mit Java 17 kompilieren** -
+  keine virtuellen Threads, kein `getFirst()`/`removeLast()`, kein Pattern-Matching-switch.
+  Wer es doch tut, bricht den Build des Legacy-Plugins, nicht erst einen 1.16-Server.
+  Anders ist nur, was auf alten Servern anders gehen muss: Texte als Strings statt
+  Components (`LegacyText`), Chat ueber `AsyncPlayerChatEvent`, `sendOpLevel` per
+  Reflection (fehlt die Methode, bleibt F3+F4 fuer Nicht-Operatoren aus).
+- **Der Kern laeuft in einem eigenen Klassenlader.** Paper 1.16 schreibt jede Plugin-Klasse
+  mit einem alten ASM um, das Java-17-Klassen nicht lesen kann - jede schrieb einen ERROR
+  mit Stacktrace ins Log, auch spaeter im Betrieb. Deshalb besteht das Plugin aus einem
+  Lader (`src/bootstrap`, Java 8, zwei Klassen) und dem Kern als
+  `META-INF/vibecloud/core.jar`, den der Lader nach `plugins/vibeCloud/core.jar` legt und
+  selbst laedt. Was Bukkit nicht laedt, schreibt es nicht um. Plugins, die das Legacy-Plugin
+  ansprechen, sehen nur `hasPermission` und `switchServer` - Signaturen mit Klassen des
+  Kerns wuerden ihn ein zweites Mal laden lassen.
+- **Alles Eingepackte ist verlagert** (gson, snakeyaml, guava, protobuf, Adventure 4,
+  SLF4J): Paper 1.16 bringt eigene, aeltere Fassungen mit. Adventure 5 ist fuer Java 21
+  gebaut, deshalb 4.26. SLF4J schreibt ueber `slf4j-jdk14` in die Serverkonsole - Paper 1.16
+  hat keinen Anbieter, und ohne ihn liefen Verbindungsfehler ins Leere.
+- **Legacy-Server bekommen keine Modul-Bundles.** Sie sind fuer das aktuelle Paper und
+  Java 25 gebaut. Damit gibt es auf Legacy-Servern **keinen Mute-Filter** - Bann und Kick
+  laufen weiter ueber Proxy und Master.
+- **Paper bis 1.18 liest das Velocity-Secret aus `paper.yml`** (`settings.velocity-support`),
+  ab 1.19 aus `config/paper-global.yml`. `ServerConfigurator` entscheidet an
+  `StartServer.mc_version`; landet das Secret in der falschen Datei, weist der Server jeden
+  Spieler vom Proxy ab.
+
+## TLS zum Master
+- **`FingerprintTrustManager` ist ein `X509ExtendedTrustManager`.** Als einfacher
+  `X509TrustManager` wurde er von der TLS-Engine eingepackt, und die Verpackung pruefte
+  zusaetzlich den Hostnamen: Das Zertifikat lautet auf `vibecloud-master`, verbunden wird
+  mit einer IP. Unter Java 17 und 21 (Netty mit OpenSSL) scheiterte daran jede Verbindung;
+  unter Java 25 nahm Netty einen anderen Weg, deshalb fiel es erst mit dem Legacy-Plugin
+  auf. Der Hostname beweist nichts mehr, wenn der Fingerprint genau ein Zertifikat festlegt.
+  Ein falscher Fingerprint wird weiter abgelehnt (`FingerprintTrustManagerTest`, und im
+  Durchlauf unter 17 und 25 geprueft).
+
+## NICHT verifiziert (Mehrere Server-Versionen)
+- **Kein Spieler auf einem Legacy-Server.** Plugin verbunden - Rechte-Bridge und Chat-Format
+  sind ohne Client nicht gesehen. Dasselbe gilt fuer das Forwarding: `paper.yml` ist richtig
+  geschrieben, aber kein Proxy hat einen Spieler auf einen 1.16-Server geschickt.
+- **Nicht jede Version ist gestartet worden** - 1.16.1, 1.16.5, 1.20.4, 1.21.4 und 26.2. Was
+  dazwischen liegt (1.17, 1.18, 1.19, 1.20.5/6), ist nur durch die Regeln abgedeckt.
+- **Velocity-Versionen** sind waehlbar, aber nur 4.2 lief je unter der Cloud.
+- **Nur unter Windows.** Die Java-Erkennung unter Linux (`/usr/lib/jvm/...`) ist nicht
+  durchgespielt.
+- **Ein Node ohne passende Java** ist nur in Tests durchgespielt, nicht im Betrieb.
+
 # SFTP fuer Templates (dynamische Gruppen)
 - **Einen dynamischen Server bearbeitet man nicht - man bearbeitet sein Template.** Sein
   Verzeichnis entsteht bei jedem Start neu und ist nach dem Stopp weg. Was bleiben soll,
@@ -889,6 +1001,13 @@ Der Weg ist sicher, weil der Node-Kanal authentifiziert und fingerprint-gepinnt 
 - **`velocity.toml` braucht einen leeren `[forced-hosts]`-Abschnitt.** Fehlt er, nimmt
   Velocity seine Beispiel-Hosts, findet die Server nicht und startet nicht.
 - Das Einmal-Secret gilt nur fuer `RegisterServer`; danach gilt das Sitzungs-Token.
+- **Das Login-Gate am Proxy haengt am `LoginEvent`, nicht am `PreLoginEvent`.** Vorher kennt
+  Velocity nur die UUID, die der Client selbst schickt - ungeprueft, und vor 1.19.1 gar
+  keine. So war es: Ein 1.16.5-Client wurde unter einer ausgerechneten Offline-UUID
+  geprueft, seine Entscheidung danach unter der echten nicht gefunden, und Velocity wies ihn
+  mit "keine verfuegbaren Server" ab. Und die Bann-Pruefung lief gegen eine UUID, die ein
+  veraenderter Client frei waehlen konnte. Im `LoginEvent` ist die Anmeldung bei Mojang
+  durch. **Nicht im Spiel gesehen**, dass ein Bann jetzt bei einem 1.16.5-Client greift.
 
 # Wichtige Regeln aus M2
 - **`mc_version: latest` heisst "neueste Version mit STABILEN Builds"**, nicht die neueste
@@ -909,7 +1028,7 @@ erst am Ende eines Meilensteins:
 ./gradlew updateTestEnv
 ```
 
-Das baut alles inklusive Tests und kopiert danach die fuenf Dateien, die die Testumgebung
+Das baut alles inklusive Tests und kopiert danach die sechs Dateien, die die Testumgebung
 braucht:
 
 | Datei | Ziel in der Testumgebung |
@@ -919,6 +1038,7 @@ braucht:
 | `module-punishment.jar` | `master/modules/` |
 | `vibecloud-paper.jar` | `master/templates/global/server/plugins/` |
 | `vibecloud-velocity.jar` | `master/templates/global/proxy/plugins/` |
+| `vibecloud-paper-legacy.jar` | `master/templates/global/server-legacy/plugins/` |
 | `dashboard/dist/` | `master/dashboard/` (nur wenn gebaut) |
 
 - **Schlaegt ein Test fehl, wird nichts kopiert.** Der Task haengt am vollstaendigen Build,

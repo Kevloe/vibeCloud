@@ -1,6 +1,13 @@
 import { useEffect, useState } from "react";
-import { ApiError, request, type Field as GroupField, type Group } from "../api";
+import {
+  ApiError,
+  request,
+  type Field as GroupField,
+  type Group,
+  type VersionList,
+} from "../api";
 import { Button } from "../ui/Button";
+import { Icon } from "../ui/Icon";
 import { changedFields, FieldGrid } from "../ui/FieldsForm";
 import { Field, Select, TextInput } from "../ui/Form";
 import { Badge, Card, Cell, Empty, PageHeader, Row, Table } from "../ui/Layout";
@@ -118,7 +125,7 @@ export function Groups() {
           />
         ) : (
           <Table
-            columns={["Name", "Plattform", "Online", "Min / Max", "Speicher", ""]}
+            columns={["Name", "Plattform", "Version", "Online", "Min / Max", "Speicher", ""]}
           >
             {groups.map((group) => (
               <Row key={group.name} highlighted={group.name === editingName}>
@@ -130,6 +137,7 @@ export function Groups() {
                   </span>
                 </Cell>
                 <Cell>{group.platform}</Cell>
+                <Cell className="tabular-nums">{group.fields.mc_version || "–"}</Cell>
                 <Cell className="tabular-nums">{group.online}</Cell>
                 <Cell className="tabular-nums">
                   {group.minOnline} / {group.maxOnline}
@@ -245,11 +253,27 @@ function EditGroup({
   const toast = useToast();
   const [draft, setDraft] = useState<Record<string, string>>(group.fields);
   const [busy, setBusy] = useState(false);
+  const { list: versions } = useVersions(group.platform);
 
   // Nach dem Speichern laedt die Seite neu - dann gilt der neue Stand, nicht der Entwurf.
   useEffect(() => setDraft(group.fields), [group]);
 
   const changed = changedFields(draft, group.fields);
+
+  // Der Master kennt die Versionen nur je Plattform - /groups/fields gilt fuer alle
+  // Gruppen. Deshalb kommen die Vorschlaege fuer mc_version hier dazu. Es bleiben
+  // Vorschlaege: Ohne Liste (PaperMC nicht erreichbar) geht trotzdem jede Eingabe.
+  const versionIds = versions?.selectable
+    ? ["latest", ...versions.versions.map((version) => version.id)]
+    : [];
+  const shownFields =
+    versionIds.length > 0
+      ? fields.map((field) =>
+          field.name === "mc_version" ? { ...field, values: versionIds } : field,
+        )
+      : fields;
+  const requirement = requirementOf(versions, draft.mc_version ?? "");
+  const versionChanged = (draft.mc_version ?? "") !== (group.fields.mc_version ?? "");
 
   async function save() {
     setBusy(true);
@@ -311,11 +335,24 @@ function EditGroup({
       }
     >
       <FieldGrid
-        fields={fields}
+        fields={shownFields}
         draft={draft}
         current={group.fields}
+        notes={requirement ? { mc_version: requirement.text } : {}}
         onChange={(name, value) => setDraft({ ...draft, [name]: value })}
       />
+      {/*
+        Bei einer geaenderten Version steht unter dem Feld "Vorher: ...". Was die neue
+        braucht, soll man trotzdem vor dem Speichern sehen.
+      */}
+      {versionChanged && requirement && versions && (
+        <div className="mt-4 space-y-2">
+          <p className="text-xs text-text-muted">
+            {draft.mc_version}: {requirement.text}
+          </p>
+          <JavaWarning list={versions} java={requirement.java} />
+        </div>
+      )}
     </Modal>
   );
 }
@@ -333,14 +370,28 @@ function CreateGroup({
   const toast = useToast();
   const [name, setName] = useState("");
   const [platform, setPlatform] = useState("PAPER");
+  const [version, setVersion] = useState("latest");
   const [busy, setBusy] = useState(false);
+  const { list: versions, failed } = useVersions(open ? platform : null);
+
+  const selectable = platform !== "MINESTOM";
+  // Eine Auswahl nur, wenn die Liste da ist. Sonst ein freies Feld - die Versionsliste
+  // kommt von PaperMC, und ohne Internet soll man trotzdem eine Gruppe anlegen koennen.
+  const asSelect = versions !== null && versions.reachable && versions.versions.length > 0;
+  const requirement = requirementOf(versions, version);
 
   async function create() {
     setBusy(true);
     try {
-      await request("/api/v1/groups", { method: "POST", body: { name, platform } });
-      toast.success(`Gruppe ${name} angelegt.`);
+      await request("/api/v1/groups", {
+        method: "POST",
+        body: selectable ? { name, platform, version } : { name, platform },
+      });
+      toast.success(
+        selectable ? `Gruppe ${name} angelegt (${version}).` : `Gruppe ${name} angelegt.`,
+      );
       setName("");
+      setVersion("latest");
       onClose();
       await onCreated();
     } catch (exception) {
@@ -384,7 +435,11 @@ function CreateGroup({
             <Select
               {...props}
               value={platform}
-              onChange={(event) => setPlatform(event.target.value)}
+              onChange={(event) => {
+                setPlatform(event.target.value);
+                // Paper- und Velocity-Versionen haben nichts gemeinsam.
+                setVersion("latest");
+              }}
             >
               <option value="PAPER">PAPER</option>
               <option value="VELOCITY">VELOCITY</option>
@@ -392,7 +447,137 @@ function CreateGroup({
             </Select>
           )}
         </Field>
+
+        {selectable ? (
+          <Field
+            label="Version"
+            hint={
+              requirement?.text ??
+              (failed || (versions && !versions.reachable)
+                ? "Versionsliste nicht abrufbar - Version von Hand eintragen, geprüft wird sie beim Speichern."
+                : "Fehlt das Jar, lädt der Master es nach dem Anlegen herunter.")
+            }
+          >
+            {(props) =>
+              asSelect ? (
+                <Select
+                  {...props}
+                  value={version}
+                  onChange={(event) => setVersion(event.target.value)}
+                >
+                  <option value="latest">latest (neueste stabile)</option>
+                  {versions.versions.map((entry) => (
+                    <option key={entry.id} value={entry.id}>
+                      {entry.id}
+                      {entry.legacy ? " · Legacy" : ""}
+                      {entry.downloaded ? " · geladen" : ""}
+                    </option>
+                  ))}
+                </Select>
+              ) : (
+                <TextInput
+                  {...props}
+                  value={version}
+                  onChange={(event) => setVersion(event.target.value.trim())}
+                  placeholder="latest"
+                />
+              )
+            }
+          </Field>
+        ) : (
+          <p className="text-xs text-text-muted">
+            Minestom bringt sein Jar selbst mit: templates/{name || "<gruppe>"}/server.jar.
+          </p>
+        )}
+
+        {/* Am Formular und nicht als Toast: Das muss man vor dem Klick lesen. */}
+        {selectable && requirement && versions && (
+          <JavaWarning list={versions} java={requirement.java} />
+        )}
       </div>
     </Modal>
+  );
+}
+
+/**
+ * Die waehlbaren Versionen einer Plattform, wie {@code group versions} sie zeigt.
+ *
+ * {@code failed} heisst: kein Recht ({@code vibecloud.command.group.versions}) oder der
+ * Master nicht erreichbar. Dann gibt es ein freies Feld statt einer Auswahl.
+ */
+function useVersions(platform: string | null) {
+  const [list, setList] = useState<VersionList | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (!platform) {
+      return;
+    }
+    let active = true;
+    setList(null);
+    setFailed(false);
+    request<VersionList>(`/api/v1/groups/versions?platform=${platform}`)
+      .then((answer) => active && setList(answer))
+      .catch(() => active && setFailed(true));
+    return () => {
+      active = false;
+    };
+  }, [platform]);
+
+  return { list, failed };
+}
+
+/** Was ein Server dieser Version braucht - eine Zeile fuer den Hinweis am Feld. */
+function requirementOf(
+  list: VersionList | null,
+  version: string,
+): { text: string; java: number } | null {
+  if (!list || !list.selectable) {
+    return null;
+  }
+  if (version === "latest") {
+    return {
+      text: `Neueste stabile Version · braucht Java ${list.latestJava}+`,
+      java: list.latestJava,
+    };
+  }
+  const found = list.versions.find((entry) => entry.id === version);
+  if (!found) {
+    return null;
+  }
+  const parts = [`Braucht Java ${found.java}+`];
+  if (found.legacy) {
+    parts.push("bekommt das Legacy-Plugin");
+  }
+  parts.push(found.downloaded ? "Jar ist geladen" : "Jar wird nach dem Speichern geladen");
+  if (!found.supported) {
+    parts.push("von PaperMC nicht mehr gepflegt");
+  }
+  return { text: parts.join(" · "), java: found.java };
+}
+
+/**
+ * Warnt, wenn kein verbundener Node die noetige Java hat.
+ *
+ * Gespeichert werden darf trotzdem: Die Java laesst sich nachtragen, und eine Gruppe
+ * vorzubereiten, bevor der Root eingerichtet ist, ist ein normaler Ablauf. Ein Node, der
+ * nichts meldet, ist ein alter Wrapper - der startet alles mit seiner eigenen Java, so wie
+ * der Master es auch sieht.
+ */
+function JavaWarning({ list, java }: { list: VersionList; java: number }) {
+  const ready = list.nodes.some(
+    (node) => node.java.length === 0 || node.java.some((version) => version >= java),
+  );
+  if (ready) {
+    return null;
+  }
+  return (
+    <p className="flex items-start gap-2 rounded-md border border-warn/40 p-3 text-xs text-warn">
+      <Icon name="alert" className="mt-px size-4 shrink-0" />
+      {list.nodes.length === 0
+        ? `Kein Node ist verbunden. Server dieser Version brauchen Java ${java} oder neuer auf dem Node.`
+        : `Kein verbundener Node hat Java ${java} oder neuer. Die Server starten erst, wenn ` +
+          `ein Node sie installiert und in seiner wrapper.json unter javaRuntimes einträgt.`}
+    </p>
   );
 }

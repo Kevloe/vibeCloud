@@ -68,6 +68,13 @@ public record ServerGroup(
                 100, false, 0);
     }
 
+    /** Dieselbe Gruppe mit einer anderen Version - fuer {@code group create ... <version>}. */
+    public ServerGroup withMcVersion(String version) {
+        return new ServerGroup(name, platform, staticGroup, minOnline, maxOnline, maxPlayers,
+                memoryMb, jvmFlags, allowedNodes, startPercent, idleTimeout, namePattern,
+                template, version, jarSource, fallback, joinPriority, maintenance, priority);
+    }
+
     /** Erlaubte Zeichen im Servernamen - Velocity begrenzt zusaetzlich auf 32 Zeichen. */
     private static final Pattern VALID_NAME = Pattern.compile("[A-Za-z0-9_#.-]+");
     public static final int MAX_SERVER_NAME_LENGTH = 32;

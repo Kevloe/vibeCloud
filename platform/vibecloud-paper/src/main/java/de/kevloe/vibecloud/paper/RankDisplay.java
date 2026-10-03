@@ -29,9 +29,6 @@ import java.util.logging.Logger;
  */
 public final class RankDisplay {
 
-    /** Teamnamen sind auf 16 Zeichen begrenzt - deshalb Praefix kurz und Rang gekuerzt. */
-    private static final int MAX_TEAM_NAME = 16;
-
     private static final String DEFAULT_CHAT_FORMAT =
             "<prefix><name><suffix><gray>:</gray> <message>";
 
@@ -119,23 +116,9 @@ public final class RankDisplay {
     }
 
     private Team teamFor(Scoreboard scoreboard, RankData rank) {
-        String name = teamName(rank);
+        String name = RankTeams.teamName(rank);
         Team team = scoreboard.getTeam(name);
         return team != null ? team : scoreboard.registerNewTeam(name);
-    }
-
-    /**
-     * Teamname mit invertiertem Gewicht als Praefix.
-     *
-     * <p>Minecraft sortiert Teams alphabetisch. {@code 999 - weight} dreht die Reihenfolge,
-     * sodass ein hoeherer Rang weiter oben in der Tab-Liste steht.
-     */
-    static String teamName(RankData rank) {
-        int inverted = Math.max(0, Math.min(999, 999 - rank.getWeight()));
-        String prefix = String.format("%04d_", inverted);
-        String id = rank.getId();
-        int room = MAX_TEAM_NAME - prefix.length();
-        return prefix + (id.length() > room ? id.substring(0, room) : id);
     }
 
     /**

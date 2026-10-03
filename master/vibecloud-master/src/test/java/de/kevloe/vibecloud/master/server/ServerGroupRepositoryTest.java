@@ -16,6 +16,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import java.sql.Connection;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -117,5 +119,70 @@ class ServerGroupRepositoryTest {
         assertThatThrownBy(() -> groups.updateField("lobby", "memory", "viel"))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThat(groups.find("lobby").orElseThrow().memoryMb()).isEqualTo(2048);
+    }
+
+    /** Laesst nur 1.16.5 und latest zu und merkt sich, was angenommen wurde. */
+    private final List<String> accepted = new CopyOnWriteArrayList<>();
+
+    private void onlyKnownVersions() {
+        groups.setVersionCheck(new ServerGroupRepository.VersionCheck() {
+            @Override
+            public Optional<String> problemWith(ServerGroup group) {
+                return List.of("latest", "1.16.5").contains(group.mcVersion())
+                        ? Optional.empty()
+                        : Optional.of("Die Version " + group.mcVersion() + " gibt es nicht");
+            }
+
+            @Override
+            public void accepted(ServerGroup group) {
+                accepted.add(group.name() + "=" + group.mcVersion());
+            }
+        });
+    }
+
+    @Test
+    @DisplayName("Eine unbekannte Version wird abgelehnt und nichts gespeichert")
+    void unbekannteVersion() {
+        onlyKnownVersions();
+
+        assertThatThrownBy(() -> groups.updateField("lobby", "mc_version", "1.16.9"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("1.16.9 gibt es nicht");
+        assertThat(groups.find("lobby").orElseThrow().mcVersion()).isEqualTo("latest");
+        assertThat(accepted).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Eine bekannte Version wird gespeichert und danach gemeldet - zum Vorladen")
+    void bekannteVersion() {
+        onlyKnownVersions();
+
+        assertThat(groups.updateField("lobby", "mc_version", "1.16.5")).isTrue();
+        assertThat(groups.find("lobby").orElseThrow().mcVersion()).isEqualTo("1.16.5");
+        assertThat(accepted).containsExactly("lobby=1.16.5");
+    }
+
+    @Test
+    @DisplayName("Andere Felder fragen die Versionspruefung nicht")
+    void andereFelder() {
+        onlyKnownVersions();
+
+        assertThat(groups.updateField("lobby", "memory", "4096")).isTrue();
+        assertThat(accepted).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Auch das Anlegen geht durch die Versionspruefung")
+    void anlegen() {
+        onlyKnownVersions();
+
+        assertThatThrownBy(() -> groups.create(ServerGroup.defaults("skywars",
+                ServerPlatformType.PAPER, "skywars").withMcVersion("1.8.8")))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(groups.find("skywars")).isEmpty();
+
+        groups.create(ServerGroup.defaults("skywars", ServerPlatformType.PAPER, "skywars")
+                .withMcVersion("1.16.5"));
+        assertThat(accepted).containsExactly("skywars=1.16.5");
     }
 }

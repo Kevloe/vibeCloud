@@ -119,6 +119,9 @@ public final class VibeCloudMaster implements AutoCloseable {
     private PermissionService permissionService;
     private ModuleManager moduleManager;
     private TemplateStore templateStore;
+    private JarStore jarStore;
+    private final de.kevloe.vibecloud.master.template.VersionCatalog versionCatalog =
+            new de.kevloe.vibecloud.master.template.VersionCatalog();
     private CommandRegistry consoleCommands;
     private de.kevloe.vibecloud.master.grpc.PluginServiceImpl pluginService;
     private Server grpcServer;
@@ -190,9 +193,24 @@ public final class VibeCloudMaster implements AutoCloseable {
                 de.kevloe.vibecloud.master.sftp.SftpAccountService.PERMISSION_PREFIX + "*",
                 "SFTP-Zugang zu den Verzeichnissen aller statischen Server");
 
-        JarStore jars = new JarStore(workingDirectory.resolve("jars"));
+        JarStore jars = new JarStore(workingDirectory.resolve("jars"), versionCatalog);
+        jarStore = jars;
         TemplateStore templates = new TemplateStore(workingDirectory.resolve("templates"), jars);
         templateStore = templates;
+        // Jede Gruppe, ob aus Konsole oder Dashboard, kommt hier vorbei: Version pruefen,
+        // und nach dem Speichern das Jar schon laden - nicht erst beim ersten Start.
+        groups.setVersionCheck(new ServerGroupRepository.VersionCheck() {
+            @Override
+            public java.util.Optional<String> problemWith(
+                    de.kevloe.vibecloud.api.server.ServerGroup group) {
+                return versionCatalog.problemWith(group);
+            }
+
+            @Override
+            public void accepted(de.kevloe.vibecloud.api.server.ServerGroup group) {
+                jars.prefetch(group);
+            }
+        });
         logs = new LogArchive(workingDirectory.resolve("logs"), config.servers.logRetentionDays);
         ConsoleBuffer console = new ConsoleBuffer();
 
@@ -313,7 +331,8 @@ public final class VibeCloudMaster implements AutoCloseable {
                 messageDistributor, configFile));
         commands.register(new NodeCommands(nodeRepository, nodes, audit,
                 certificate.fingerprint(), config.grpc.port));
-        commands.register(new GroupCommands(groups, servers, audit));
+        commands.register(new GroupCommands(groups, servers, audit, versionCatalog, jarStore,
+                nodes));
         commands.register(new ServerCommands(serverService, servers, groups, bindings));
         commands.register(new ScreenCommand(console, servers, serverService, attachment));
         commands.register(new RankCommands(permissionService, rankRepository, playerService));
@@ -459,7 +478,8 @@ public final class VibeCloudMaster implements AutoCloseable {
                 servers, serverService, groups, nodeRepository, nodes, playerService,
                 rankRepository, transfers, moduleManager, console, onlinePlayers, audit,
                 workingDirectory.resolve("modules"), messageDistributor, consoleCommands,
-                maintenanceSwitch, configFile, sftpAccounts, bindings, templateSftp);
+                maintenanceSwitch, configFile, sftpAccounts, bindings, templateSftp,
+                versionCatalog, jarStore);
 
         // Neben dem Master, damit ein Update des Dashboards nur ein Verzeichnis ersetzt.
         httpApi.start(config.http, workingDirectory.resolve("dashboard"));

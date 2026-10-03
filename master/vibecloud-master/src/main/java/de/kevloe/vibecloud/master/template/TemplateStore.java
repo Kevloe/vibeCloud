@@ -12,8 +12,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -29,6 +31,11 @@ import java.util.stream.Stream;
  * templates/&lt;template&gt;/      -> nur in Server dieser Gruppe (darf ueberschreiben)
  * </pre>
  * Dazu {@code server.jar} aus dem {@link JarStore} und ab M5 die Modul-Bundles.
+ *
+ * <p><b>Paper unter 26.2 bekommt das Legacy-Plugin</b> (siehe {@link VersionCatalog}): Aus
+ * {@code global/server} faellt {@code plugins/vibecloud-paper.jar} heraus, dafuer kommt
+ * {@code templates/global/server-legacy/} dazu. Modul-Bundles bekommt so ein Server nicht -
+ * sie sind gegen das aktuelle Paper und Java 25 gebaut und wuerden beim Laden scheitern.
  *
  * <p>Der Wrapper bekommt eine <b>fertige</b> Liste mit Zielpfaden und Hashes und muss die
  * Schichtung nicht kennen. Das haelt die Reihenfolge-Entscheidung an einer Stelle.
@@ -55,11 +62,29 @@ public final class TemplateStore {
     /** sha256 -> Datei auf der Platte, damit {@code PullBlobs} liefern kann. */
     private final Map<String, Path> blobs = new ConcurrentHashMap<>();
 
+    /** Das aktuelle Cloud-Plugin - auf einem Legacy-Server wuerde Paper es ablehnen. */
+    static final String MODERN_PLUGIN = "plugins/vibecloud-paper.jar";
+
+    /** Was ein Paper-Server unter 26.2 statt des aktuellen Plugins bekommt. */
+    static final String LEGACY_TEMPLATE = "global/server-legacy";
+
     public TemplateStore(Path root, JarStore jars) throws IOException {
         this.root = root;
         this.jars = jars;
         Files.createDirectories(root.resolve("global/server"));
         Files.createDirectories(root.resolve("global/proxy"));
+        Files.createDirectories(root.resolve(LEGACY_TEMPLATE));
+    }
+
+    /**
+     * Alles, was der Wrapper fuer einen Start braucht, ausser Name und Port.
+     *
+     * @param mcVersion   aufgeloest, nie "latest"; leer bei einem eigenen Jar ohne Angabe
+     * @param javaVersion Mindest-Java, 0 = die des Wrappers
+     * @param jvmFlags    Flags der Gruppe plus die, die die Version selbst braucht
+     */
+    public record PreparedStart(TemplateManifest manifest, String mcVersion, int javaVersion,
+                                List<String> jvmFlags, boolean legacyPlugin) {
     }
 
     /**
@@ -68,14 +93,31 @@ public final class TemplateStore {
      * <p>Wird bei jedem Serverstart aufgerufen. Das ist gewollt: Eine Aenderung im Template
      * wirkt damit auf den naechsten Start, ohne dass irgendwo ein Cache geleert werden muss.
      */
-    public TemplateManifest buildManifest(ServerGroup group)
+    public PreparedStart buildManifest(ServerGroup group)
             throws IOException, InterruptedException {
+
+        // Das Jar zuerst: Erst seine Version sagt, welches Plugin der Server bekommt.
+        JarStore.ResolvedJar jar = jars.resolve(group);
+        boolean legacy = VersionCatalog.isLegacy(group.platform(), jar.version());
 
         // LinkedHashMap: Die Einfuegereihenfolge ist die Kopierreihenfolge. Spaetere
         // Eintraege mit demselben Zielpfad ueberschreiben frueher eingefuegte.
         Map<String, ManifestEntry> entries = new LinkedHashMap<>();
 
         collect(root.resolve(group.platform().globalTemplate()), "", entries);
+        if (legacy) {
+            // Vor dem Gruppen-Template: Wer dort bewusst ein eigenes Plugin hinlegt,
+            // behaelt es.
+            entries.remove(MODERN_PLUGIN);
+            Path legacyTemplate = root.resolve(LEGACY_TEMPLATE);
+            collect(legacyTemplate, "", entries);
+            if (entries.keySet().stream()
+                    .noneMatch(path -> path.startsWith("plugins/vibecloud-paper"))) {
+                LOG.warn("Gruppe {} laeuft mit {} und braucht das Legacy-Plugin - in {} liegt "
+                         + "keins. Der Server startet, ist aber nicht mit der Cloud verbunden.",
+                        group.name(), jar.version(), legacyTemplate.resolve("plugins"));
+            }
+        }
 
         Path groupTemplate = root.resolve(group.template());
         if (Files.isDirectory(groupTemplate)) {
@@ -88,13 +130,20 @@ public final class TemplateStore {
         // Modul-Bundles nach dem Gruppen-Template: Sie duerfen eine gleichnamige Datei
         // aus dem Template ueberschreiben, nicht umgekehrt - sonst koennte eine alte Kopie
         // im Template das aktuelle Bundle verdecken.
-        for (var bundle : bundleProvider.bundlesFor(platformName(group)).entrySet()) {
-            entries.put(bundle.getKey(), entryFor(bundle.getValue(), bundle.getKey()));
+        var bundles = bundleProvider.bundlesFor(platformName(group));
+        if (legacy) {
+            if (!bundles.isEmpty()) {
+                LOG.info("Gruppe {} ({}) bekommt keine Modul-Bundles ({}) - sie sind fuer das "
+                         + "aktuelle Paper gebaut", group.name(), jar.version(), bundles.keySet());
+            }
+        } else {
+            for (var bundle : bundles.entrySet()) {
+                entries.put(bundle.getKey(), entryFor(bundle.getValue(), bundle.getKey()));
+            }
         }
 
-        Path jar = jars.resolve(group);
-        if (jar != null) {
-            entries.put("server.jar", entryFor(jar, "server.jar"));
+        if (jar.path() != null) {
+            entries.put("server.jar", entryFor(jar.path(), "server.jar"));
         } else if (!entries.containsKey("server.jar")) {
             throw new IOException("Gruppe " + group.name() + " nutzt jar_source=template, "
                                   + "aber in " + groupTemplate + " liegt keine server.jar");
@@ -110,7 +159,17 @@ public final class TemplateStore {
                 .build();
 
         manifests.put(manifestId, manifest);
-        return manifest;
+
+        List<String> flags = new ArrayList<>(group.jvmFlags());
+        for (String flag : VersionCatalog.extraJvmFlags(group.platform(), jar.version())) {
+            if (!flags.contains(flag)) {
+                flags.add(flag);
+            }
+        }
+        int javaVersion = VersionCatalog.requiredJava(group.platform(), jar.version(),
+                jar.javaMinimum());
+        return new PreparedStart(manifest, jar.version(), javaVersion, List.copyOf(flags),
+                legacy);
     }
 
     /**

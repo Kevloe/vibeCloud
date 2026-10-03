@@ -31,7 +31,8 @@ class TemplateDirectoryTest {
     @BeforeEach
     void setUp() throws IOException {
         root = directory.resolve("templates");
-        templates = new TemplateStore(root, new JarStore(directory.resolve("jars")));
+        templates = new TemplateStore(root, new JarStore(directory.resolve("jars"),
+                new VersionCatalog()));
     }
 
     private static ServerGroup group(String template) {

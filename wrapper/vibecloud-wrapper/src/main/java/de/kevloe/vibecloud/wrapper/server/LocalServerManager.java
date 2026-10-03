@@ -40,6 +40,7 @@ public final class LocalServerManager {
     private final WrapperConfig config;
     private final TemplateCache cache;
     private final ServerRuntime runtime;
+    private final JavaRuntimes javaRuntimes;
 
     private final Map<String, LocalServer> servers = new ConcurrentHashMap<>();
 
@@ -57,6 +58,7 @@ public final class LocalServerManager {
         this.config = config;
         this.cache = cache;
         this.runtime = runtime;
+        this.javaRuntimes = JavaRuntimes.detect(config.javaRuntimes);
         Files.createDirectories(root.resolve("servers"));
         Files.createDirectories(root.resolve("logs/pending"));
     }
@@ -78,6 +80,18 @@ public final class LocalServerManager {
             return;
         }
 
+        // Zuerst, vor dem Verzeichnis: Ohne passende Java soll der Fehler den Grund nennen,
+        // nicht "Prozess sofort beendet".
+        JavaRuntimes.Selected java = javaRuntimes.select(request.getJavaVersion())
+                .orElseThrow(() -> new IllegalStateException(name + " braucht Java "
+                        + request.getJavaVersion() + " oder neuer, dieser Node hat "
+                        + javaRuntimes.versions() + ". In der wrapper.json unter javaRuntimes "
+                        + "eintragen und den Wrapper neu starten."));
+        if (request.getJavaVersion() > 0) {
+            LOG.info("{} startet mit Java {}{}", name, java.version(),
+                    request.getMcVersion().isEmpty() ? "" : " (" + request.getMcVersion() + ")");
+        }
+
         // Statische Server behalten ihr Verzeichnis samt Welt. Nur bei dynamischen wird
         // sauber neu aufgesetzt, damit kein Rest eines frueheren Laufs stoert.
         if (!request.getStaticServer() && Files.exists(directory)) {
@@ -92,7 +106,7 @@ public final class LocalServerManager {
         // verschieden und wuerden den inhaltsadressierten Cache aufblaehen.
         ServerConfigurator.apply(request, directory);
 
-        List<String> command = buildCommand(request);
+        List<String> command = buildCommand(request, java);
         ServerRuntime.RunningServer running = runtime.start(
                 new ServerRuntime.StartRequest(
                         name,
@@ -115,13 +129,16 @@ public final class LocalServerManager {
      * Startargumente. Der Port geht bei Paper und Minestom als Argument mit; Velocity liest
      * ihn aus seiner eigenen Konfiguration.
      */
-    private List<String> buildCommand(StartServer request) {
+    static List<String> buildCommand(StartServer request, JavaRuntimes.Selected java) {
         List<String> command = new ArrayList<>();
-        command.add(javaExecutable());
+        command.add(java.executable());
         command.add("-Xms" + request.getMemoryMb() + "M");
         command.add("-Xmx" + request.getMemoryMb() + "M");
         // Netty laedt native Bibliotheken; ohne das Flag warnt Java 25 in jeder Serverkonsole.
-        command.add("--enable-native-access=ALL-UNNAMED");
+        // Erst ab 22: Java 8 und 16 kennen das Flag nicht und starten mit ihm gar nicht.
+        if (java.version() >= 22) {
+            command.add("--enable-native-access=ALL-UNNAMED");
+        }
         command.addAll(request.getJvmFlagsList());
         command.add("-jar");
         command.add("server.jar");
@@ -141,12 +158,6 @@ public final class LocalServerManager {
             }
         }
         return command;
-    }
-
-    /** Dieselbe JVM wie der Wrapper - so laeuft nicht versehentlich eine aeltere Java-Version. */
-    private static String javaExecutable() {
-        Path java = Path.of(System.getProperty("java.home"), "bin", "java");
-        return Files.isExecutable(java) ? java.toString() : "java";
     }
 
     private static String stopCommandFor(ServerPlatform platform) {
@@ -183,6 +194,11 @@ public final class LocalServerManager {
         if (Files.notExists(eula)) {
             Files.writeString(eula, "eula=true\n");
         }
+    }
+
+    /** Fuer die Anmeldung beim Master: Welche Java-Versionen dieser Node hat. */
+    public List<Integer> javaVersions() {
+        return javaRuntimes.versions();
     }
 
     public Optional<LocalServer> find(String name) {

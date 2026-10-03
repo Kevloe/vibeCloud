@@ -4,7 +4,8 @@ import com.google.inject.Inject;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.connection.PostLoginEvent;
-import com.velocitypowered.api.event.connection.PreLoginEvent;
+import com.velocitypowered.api.event.ResultedEvent;
+import com.velocitypowered.api.event.connection.LoginEvent;
 import com.velocitypowered.api.event.permission.PermissionsSetupEvent;
 import com.velocitypowered.api.event.player.PlayerChooseInitialServerEvent;
 import com.velocitypowered.api.event.player.ServerConnectedEvent;
@@ -536,19 +537,26 @@ public final class VibeCloudVelocity implements CloudConnection.CommandHandler {
      *
      * <p>Hier haengt sich ab M6 das punishment-Modul ein - der Proxy weiss nichts von Bans,
      * er fragt nur (PLAN.md Abschnitt 10a).
+     *
+     * <p><b>Im {@link LoginEvent}, nicht im {@code PreLoginEvent}.</b> Vor dem Login kennt
+     * Velocity nur die UUID, die der Client selbst mitschickt - ungeprueft, und Clients vor
+     * 1.19.1 schicken gar keine. Frueher wurde dann eine Offline-UUID ausgerechnet: Ein
+     * 1.16.5-Client wurde unter der falschen UUID geprueft, seine Entscheidung danach unter
+     * der echten nicht gefunden, und Velocity wies ihn mit "keine verfuegbaren Server" ab.
+     * Schlimmer: Die Bann-Pruefung lief gegen eine UUID, die ein veraenderter Client frei
+     * waehlen konnte. Im LoginEvent ist die Anmeldung bei Mojang durch, und
+     * {@code getPlayer().getUniqueId()} ist die echte.
      */
     @Subscribe
-    public void onPreLogin(PreLoginEvent event) {
+    public void onLogin(LoginEvent event) {
         if (connection == null) {
             return;
         }
-        String ip = event.getConnection().getRemoteAddress().getAddress().getHostAddress();
-        UUID uuid = event.getUniqueId() != null
-                ? event.getUniqueId()
-                : UUID.nameUUIDFromBytes(("OfflinePlayer:" + event.getUsername())
-                        .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        Player player = event.getPlayer();
+        String ip = player.getRemoteAddress().getAddress().getHostAddress();
+        UUID uuid = player.getUniqueId();
 
-        LoginResponse response = connection.checkLogin(uuid, event.getUsername(), ip,
+        LoginResponse response = connection.checkLogin(uuid, player.getUsername(), ip,
                 Platform.PLATFORM_JAVA, null);
 
         // Master nicht erreichbar: Standardmaessig ablehnen (PLAN.md 17.4). Nur mit
@@ -557,15 +565,15 @@ public final class VibeCloudVelocity implements CloudConnection.CommandHandler {
                 response.getDenyMessageKey()) && offlineLogins) {
             if (permissions.knows(uuid)) {
                 logger.info("{} kommt aus dem Snapshot rein - der Master ist nicht "
-                            + "erreichbar", event.getUsername());
+                            + "erreichbar", player.getUsername());
                 return;
             }
             logger.info("{} wird abgelehnt: Master offline und kein Snapshot-Eintrag",
-                    event.getUsername());
+                    player.getUsername());
         }
 
         if (!response.getAllowed()) {
-            event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
+            event.setResult(ResultedEvent.ComponentResult.denied(
                     render(response.getLocale(), response.getDenyMessageKey(),
                             response.getPlaceholdersMap())));
             return;

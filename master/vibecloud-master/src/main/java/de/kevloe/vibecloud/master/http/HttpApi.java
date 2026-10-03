@@ -90,7 +90,9 @@ public final class HttpApi implements AutoCloseable {
                    de.kevloe.vibecloud.master.config.MasterConfigFile configFile,
                    de.kevloe.vibecloud.master.sftp.SftpAccountService sftpAccounts,
                    de.kevloe.vibecloud.master.server.StaticBindingRepository bindings,
-                   de.kevloe.vibecloud.master.sftp.TemplateSftp templateSftp) {
+                   de.kevloe.vibecloud.master.sftp.TemplateSftp templateSftp,
+                   de.kevloe.vibecloud.master.template.VersionCatalog versions,
+                   de.kevloe.vibecloud.master.template.JarStore jars) {
 
         ApiAuth auth = new ApiAuth(tokens, accounts, permissions, jwt);
         WsTickets wsTickets = new WsTickets();
@@ -100,7 +102,8 @@ public final class HttpApi implements AutoCloseable {
                 nodeRepository, nodes, players, permissions, ranks, transfers, modules,
                 online);
         this.adminRoutes = new AdminRoutes(auth, groups, servers, nodeRepository, ranks,
-                permissions, modules, audit, modulesDirectory, maintenance);
+                permissions, modules, audit, modulesDirectory, maintenance, versions, jars,
+                nodes);
         this.permissionRoutes = new PermissionRoutes(auth, permissions, ranks, players,
                 commands);
         this.messageRoutes = new MessageRoutes(auth, messages, audit);

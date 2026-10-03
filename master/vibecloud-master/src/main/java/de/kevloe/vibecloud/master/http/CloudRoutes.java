@@ -245,6 +245,8 @@ final class CloudRoutes {
             entry.put("connected", nodes.isConnected(node.name()));
             entry.put("enabled", node.enabled());
             entry.put("maxMemoryMb", node.maxMemoryMb());
+            // Was der Wrapper beim Anmelden gemeldet hat - leer, wenn er nicht verbunden ist.
+            entry.put("java", nodes.javaVersionsOf(node.name()));
             entry.put("servers", servers.onNode(node.name()).size());
             entry.put("lastSeen", Times.format(node.lastSeen()));
             return entry;

@@ -78,6 +78,11 @@ message RegisterRequest {
   // ihn neben der Adresse, damit die Rueckfrage des Clients beim ersten Verbinden
   // beantwortet werden kann. Leer, wenn kein SFTP laeuft.
   string sftp_host_key = 10;
+
+  // Java-Hauptversionen, die dieser Node fuer Gameserver bereithaelt (javaRuntimes in der
+  // wrapper.json plus die eigene). Der Master startet einen Server nur auf einem Node, der
+  // eine passende hat. Leer = alter Wrapper, der das noch nicht meldet.
+  repeated int32 java_versions = 11;
 }
 
 message RegisterResponse {

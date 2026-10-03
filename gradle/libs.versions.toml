@@ -39,6 +39,11 @@ paperApi          = "26.2.build.129-stable"
 velocityApi       = "4.2.0"
 minestom          = "2026.09.12-26.2"
 adventure         = "5.2.0"
+# Fuer das Legacy-Plugin (Paper 1.16 bis 26.1, Java 17). Adventure 5 ist fuer Java 21
+# gebaut, Paper 1.16.5 bringt nur eine alte 4er mit und 1.16.1 gar keine - deshalb eine
+# eigene, verlagerte 4er im Plugin.
+paperApiLegacy    = "1.16.5-R0.1-SNAPSHOT"
+adventureLegacy   = "4.26.1"
 
 # --- Tests ---
 junit             = "6.1.3"
@@ -77,6 +82,12 @@ paper-api              = { module = "io.papermc.paper:paper-api",             ve
 velocity-api           = { module = "com.velocitypowered:velocity-api",       version.ref = "velocityApi" }
 minestom               = { module = "net.minestom:minestom",                  version.ref = "minestom" }
 adventure-minimessage  = { module = "net.kyori:adventure-text-minimessage",   version.ref = "adventure" }
+
+paper-api-legacy       = { module = "com.destroystokyo.paper:paper-api",      version.ref = "paperApiLegacy" }
+adventureLegacy-minimessage = { module = "net.kyori:adventure-text-minimessage", version.ref = "adventureLegacy" }
+adventureLegacy-serializerLegacy = { module = "net.kyori:adventure-text-serializer-legacy", version.ref = "adventureLegacy" }
+adventureLegacy-serializerPlain = { module = "net.kyori:adventure-text-serializer-plain", version.ref = "adventureLegacy" }
+slf4j-jdk14            = { module = "org.slf4j:slf4j-jdk14",                  version.ref = "slf4j" }
 
 junit-jupiter          = { module = "org.junit.jupiter:junit-jupiter",        version.ref = "junit" }
 junit-platformLauncher = { module = "org.junit.platform:junit-platform-launcher" }

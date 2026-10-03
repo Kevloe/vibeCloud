@@ -128,6 +128,32 @@ public final class NodeRegistry implements AutoCloseable {
                 .orElse("");
     }
 
+    /**
+     * Die Java-Hauptversionen, die dieser Node fuer Gameserver hat, aufsteigend.
+     *
+     * @return leer, wenn der Node nicht verbunden ist oder ein alter Wrapper es nicht meldet
+     */
+    public java.util.List<Integer> javaVersionsOf(String node) {
+        return connection(node).map(ConnectedNode::info).map(RegisterInfo::javaVersions)
+                .map(versions -> versions.stream().sorted().toList())
+                .orElse(java.util.List.of());
+    }
+
+    /**
+     * Kann dieser Node einen Server starten, der mindestens diese Java braucht?
+     *
+     * <p>Meldet ein Wrapper gar nichts, ist er aelter als diese Pruefung und startet alles mit
+     * seiner eigenen Java - dann wird nichts ausgeschlossen. Sonst liefe nach einem
+     * Master-Update auf einem Netzwerk mit alten Wrappern kein Server mehr an.
+     */
+    public boolean hasJava(String node, int required) {
+        if (required <= 0) {
+            return true;
+        }
+        java.util.List<Integer> versions = javaVersionsOf(node);
+        return versions.isEmpty() || versions.stream().anyMatch(version -> version >= required);
+    }
+
     /** Schickt einen Befehl durch den Rueckkanal dieses Nodes. */
     public boolean send(String node, NodeCommand command) {
         ConnectedNode target = connected.get(node);
@@ -200,11 +226,16 @@ public final class NodeRegistry implements AutoCloseable {
             long clockSkewMillis,
             String serverAddress,
             int sftpPort,
-            String sftpHostKey) {
+            String sftpHostKey,
+            java.util.List<Integer> javaVersions) {
+
+        public RegisterInfo {
+            javaVersions = java.util.List.copyOf(javaVersions);
+        }
 
         /** Fuer den Fall, dass ein Control-Stream ohne vorheriges Register ankommt. */
         static RegisterInfo unknown() {
-            return new RegisterInfo(0, 0, "-", "-", 0, "", 0, "");
+            return new RegisterInfo(0, 0, "-", "-", 0, "", 0, "", java.util.List.of());
         }
     }
 
