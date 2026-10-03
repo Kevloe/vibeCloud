@@ -126,6 +126,12 @@ verbindliche Quelle** fuer Architektur und Entscheidungen — bei Widerspruch gi
   Wegwerf-Umgebung: 1.16.1, 1.16.5, 1.20.4, 1.21.4 und 26.2 von der Cloud gestartet, jedes
   Plugin am Master angemeldet, eine Gruppe im Browser angelegt. Begruendungen unter
   "Mehrere Server-Versionen".
+- Nur zwei Jars: Master-Jar mit Plattform-Plugins und Dashboard, Einrichtungs-Assistent,
+  `CloudWrapper.jar join ...`, `./gradlew releaseJars`. Durchgespielt in einem leeren Ordner
+  mit Wegwerf-DB: Master ohne Konsole (Vorlage), dann mit `cloud setup` und `node add`,
+  Dashboard aus der Jar, Wrapper per `join` -> proxy-1 und lobby-1 laufen, beide Plugins
+  angemeldet. **Nicht** geprueft: der Assistent an einer echten Konsole (nur per Test mit
+  Antwortliste) und das Ganze unter Linux. Begruendungen unter "Nur zwei Jars".
 - Offen in M7: `/acp` ist noch nicht im Spiel getestet, und die Online-Liste ist ohne
   Spieler nie gefuellt gesehen worden. Das Dashboard ist am Breitbild geprueft,
   **nicht am Telefon** - die Schublade der Seitenleiste unter 1024 px hat nie jemand
@@ -1077,13 +1083,47 @@ Beim Start immer `--enable-native-access=ALL-UNNAMED` mitgeben, sonst warnt Java
 nativen Netty-Bibliotheken bei jedem Start (die Start-Skripte und die systemd-Unit tun das schon).
 
 # Erste Inbetriebnahme
-1. `docker compose up -d`
-2. Master starten -> legt `config.json` an und beendet sich. Werte pruefen.
-3. Master erneut starten -> migriert die DB, erzeugt `tls/master-cert.pem` und zeigt den
-   Zertifikat-Fingerprint.
-4. In der Konsole `node add <name> [maxMemoryMb] [ip,ip]` -> gibt eine fertige `wrapper.json`
-   samt Token und Fingerprint aus. **Das Token wird nur einmal angezeigt.**
-5. Diese `wrapper.json` auf den Root legen, Wrapper starten. `node list` zeigt ihn online.
+Ein Root braucht nur `CloudMaster.jar` bzw. `CloudWrapper.jar` (gebaut mit
+`./gradlew releaseJars` nach `build/release/`), Java 25 und eine erreichbare PostgreSQL.
+1. PostgreSQL bereitstellen (Entwicklung: `docker compose up -d`).
+2. `java -jar CloudMaster.jar` in einem leeren Ordner. Mit Konsole fragt ein Assistent
+   Datenbank, gRPC-Port, Dashboard und Standard-Gruppen ab, prueft die Verbindung und
+   startet durch. Ohne Konsole (Dienst) wie frueher: `config.json` schreiben, beenden.
+3. In der Konsole `node add <name> [maxMemoryMb] [ip,ip]` -> gibt eine fertige Zeile
+   `java -jar CloudWrapper.jar join <master>:<port> <node> <token> <fingerprint>` aus.
+   **Das Token wird nur einmal angezeigt.**
+4. Diese Zeile auf dem Root neben der `CloudWrapper.jar` ausfuehren. Danach genuegt
+   `java -jar CloudWrapper.jar`. `node list` zeigt ihn online.
+5. Module (`module-punishment.jar` usw.) **von Hand** nach `modules/` legen.
+
+# Nur zwei Jars
+- **Die Master-Jar bringt die drei Plattform-Plugins und das Dashboard mit**
+  (`bundledResources` im Master-Build, ~100 MB statt ~45). Die Plugins packt
+  `BundledFiles` beim Start nach `templates/global/.../plugins/`.
+- **Module kommen nicht mit** - auch `module-punishment` nicht. Welche Module laufen,
+  entscheidet der Betreiber; der Master legt nur den leeren Ordner `modules/` an.
+- **Auspack-Regel** (`BundledFiles`, Stand in `.vibecloud-bundled.json`): fehlt -> auspacken;
+  unveraendert seit dem letzten Auspacken -> durch die neue Fassung ersetzen (so kommt ein
+  Plugin-Update mit dem Master-Update); sonst hat jemand eine eigene Fassung hingelegt ->
+  liegen lassen und warnen. Ohne Stand gilt eine abweichende Datei als eigene. Ein
+  geloeschtes Plugin kommt zurueck - ohne ist kein Server Teil der Cloud.
+  **Folge fuer die Testumgebung:** Dort legt `updateTestEnv` die Plugins hin, ohne Stand -
+  der Master laesst sie liegen und warnt einmal je Datei, wenn sie abweichen.
+- **Das Dashboard kommt aus der Jar, ein Ordner `dashboard/` daneben geht vor.** So laesst
+  es sich ohne neuen Master tauschen, und `updateTestEnv` bleibt, wie es ist.
+- **`releaseJars` bricht ab, wenn `dashboard/dist` fehlt.** Gebaut wird es mit npm, nicht
+  Gradle (PLAN.md Abschnitt 4); `build` allein laeuft ohne weiter, damit Tests nicht an npm
+  haengen.
+- **Der Assistent laeuft nur an einer echten Konsole** (`System.console().isTerminal()`),
+  schreibt die `config.json` erst nach erfolgreicher DB-Verbindung und verlangt ein
+  Passwort. Die Standard-Gruppen legt er ueber `cloud setup` an - derselbe Weg wie
+  getippt, erst wenn die Datenbank steht.
+- **`join` ueberschreibt nie eine vorhandene `wrapper.json`** - darin steht ein Token, das
+  sich nicht wieder anzeigen laesst. Unter Linux wird sie mit 600 angelegt. Das Token
+  landet dabei in der Shell-History; der Wrapper sagt das.
+- **Was die Jars nicht mitbringen:** Java 25 (brauchen sie selbst), PostgreSQL, Java
+  17/21 fuer Paper unter 1.20.5 (`javaRuntimes`, bewusst kein Download), offene Ports
+  (gRPC zum Master, 25565 am Proxy-Node), `nft` fuer die Firewall-Verwaltung.
 
 # Abhaengigkeitsrichtung (strikt)
 `protocol` + `common` -> `api` -> {`master`, `wrapper`, `platform/*`, `module-api`} -> `modules/*`

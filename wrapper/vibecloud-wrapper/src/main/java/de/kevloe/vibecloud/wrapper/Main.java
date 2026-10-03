@@ -5,6 +5,7 @@ import de.kevloe.vibecloud.api.outbox.Outbox;
 import de.kevloe.vibecloud.common.VibeCloud;
 import de.kevloe.vibecloud.common.config.JsonConfig;
 import de.kevloe.vibecloud.wrapper.config.WrapperConfig;
+import de.kevloe.vibecloud.wrapper.config.WrapperJoin;
 import de.kevloe.vibecloud.wrapper.grpc.MasterConnection;
 import de.kevloe.vibecloud.wrapper.runtime.ProcessServerRuntime;
 import de.kevloe.vibecloud.wrapper.server.LocalServerManager;
@@ -21,12 +22,21 @@ public final class Main {
     private static final Logger LOG = LoggerFactory.getLogger(Main.class);
 
     public static void main(String[] args) {
+        if (args.length > 0 && args[0].equals("join")) {
+            // Ein neuer Root: wrapper.json aus der Zeile von 'node add' schreiben, dann
+            // ganz normal im aktuellen Verzeichnis starten.
+            if (!join(Path.of("."), java.util.Arrays.asList(args).subList(1, args.length))) {
+                System.exit(1);
+            }
+            args = new String[0];
+        }
         Path workingDirectory = Path.of(args.length > 0 ? args[0] : ".");
 
         WrapperConfig config = JsonConfig.loadOrCreate(
                 workingDirectory.resolve("wrapper.json"), WrapperConfig.class, new WrapperConfig());
         if (config == null) {
-            LOG.warn("Die passenden Werte gibt der Master mit 'node add <name>' aus.");
+            LOG.warn("Die passenden Werte gibt der Master mit 'node add <name>' aus - "
+                     + "samt fertiger Zeile fuer: {}", WrapperJoin.USAGE);
             return;
         }
         if (config.token.isBlank() || config.masterFingerprint.isBlank()) {
@@ -83,6 +93,31 @@ public final class Main {
             runtime.shutdown();
         }
         LOG.info("Wrapper beendet - die Gameserver dieses Nodes sind mit ihm gegangen");
+    }
+
+    /** @return {@code false}, wenn nichts geschrieben wurde und der Wrapper nicht starten soll */
+    private static boolean join(Path workingDirectory, java.util.List<String> args) {
+        Path file = workingDirectory.resolve("wrapper.json");
+        try {
+            WrapperConfig config = WrapperJoin.parse(args);
+            WrapperJoin.write(file, config);
+            LOG.info("wrapper.json fuer Node {} geschrieben (Master {}:{})",
+                    config.node, config.masterHost, config.masterPort);
+            LOG.info("Ab jetzt genuegt 'java -jar CloudWrapper.jar'. Das Token steht auch in "
+                     + "der Shell-History - wer den Root mit anderen teilt, leert sie.");
+            return true;
+        } catch (IllegalArgumentException exception) {
+            LOG.error(exception.getMessage());
+            LOG.error("Die fertige Zeile gibt der Master mit 'node add <name>' aus.");
+            return false;
+        } catch (java.nio.file.FileAlreadyExistsException exception) {
+            LOG.error("Hier gibt es schon eine wrapper.json - sie wird nicht ueberschrieben. "
+                      + "Neu beitreten: Datei loeschen; starten: ohne 'join'.");
+            return false;
+        } catch (java.io.IOException exception) {
+            LOG.error("wrapper.json konnte nicht geschrieben werden: {}", exception.getMessage());
+            return false;
+        }
     }
 
     /**

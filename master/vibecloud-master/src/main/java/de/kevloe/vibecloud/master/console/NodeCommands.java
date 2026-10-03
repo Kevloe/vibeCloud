@@ -134,7 +134,11 @@ public final class NodeCommands implements CommandRegistry.Command {
                      + "Fuer den Produktivbetrieb den Node mit IP-Liste neu anlegen.");
         }
         out.info("");
-        out.info("In die wrapper.json auf dem Root eintragen:");
+        out.info("Auf dem Root neben der CloudWrapper.jar ausfuehren:");
+        out.info("  java -jar CloudWrapper.jar join <adresse-des-masters>:%d %s %s %s"
+                .formatted(grpcPort, name, token, masterFingerprint));
+        out.info("");
+        out.info("Oder von Hand in die wrapper.json eintragen:");
         out.info("""
                 {
                   "masterHost": "<adresse-des-masters>",

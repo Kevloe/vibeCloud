@@ -176,8 +176,8 @@ public final class CloudCommands implements CommandRegistry.Command {
         out.info("  lobby  PAPER, dynamisch, 1-3 Instanzen, 2048 MB, Join-Ziel");
         out.info("");
         out.info("Der Scheduler startet sie von selbst, sobald ein Node verbunden ist.");
-        out.warn("Vorher pruefen: templates/proxy/ braucht eine velocity.toml mit dem "
-                 + "richtigen Port, sonst startet der Proxy nicht erreichbar.");
+        out.info("velocity.toml und server.properties legt der Wrapper selbst an. Eigene "
+                 + "Dateien gehoeren nach templates/proxy/ und templates/lobby/.");
     }
 
     /** Legt die Template-Verzeichnisse an, damit klar ist, wohin die Dateien gehoeren. */

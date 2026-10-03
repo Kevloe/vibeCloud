@@ -108,3 +108,42 @@ tasks.register("updateTestEnv") {
         }
     }
 }
+
+/**
+ * Die zwei Dateien fuer einen Root: build/release/CloudMaster.jar und CloudWrapper.jar.
+ *
+ * Mehr braucht eine Installation nicht - die Master-Jar bringt die Plattform-Plugins und das
+ * Dashboard mit (BundledFiles, HttpApi). Module gehoeren bewusst nicht dazu.
+ *
+ * Bricht ab, wenn das Dashboard nicht gebaut ist: Gebaut wird es mit npm (PLAN.md
+ * Abschnitt 4), und eine Master-Jar ohne Oberflaeche faellt sonst erst beim Betreiber auf.
+ */
+tasks.register("releaseJars") {
+    group = "vibecloud"
+    description = "Baut CloudMaster.jar und CloudWrapper.jar fuer eine Installation."
+
+    val dashboardIndex = layout.projectDirectory.file("dashboard/dist/index.html").asFile
+    val masterJar = project(":master:vibecloud-master").layout.buildDirectory
+        .file("libs/CloudMaster.jar")
+    val wrapperJar = project(":wrapper:vibecloud-wrapper").layout.buildDirectory
+        .file("libs/CloudWrapper.jar")
+    val target = layout.buildDirectory.dir("release")
+
+    subprojects.filter { it.buildFile.exists() }
+        .forEach { dependsOn(it.path + ":build") }
+
+    doFirst {
+        if (!dashboardIndex.isFile) {
+            throw GradleException("Das Dashboard ist nicht gebaut - erst "
+                + "'cd dashboard && npm run build', dann erneut.")
+        }
+    }
+    doLast {
+        val directory = target.get().asFile
+        directory.mkdirs()
+        for (jar in listOf(masterJar.get().asFile, wrapperJar.get().asFile)) {
+            jar.copyTo(directory.resolve(jar.name), overwrite = true)
+        }
+        println("Fertig: $directory (CloudMaster.jar, CloudWrapper.jar)")
+    }
+}

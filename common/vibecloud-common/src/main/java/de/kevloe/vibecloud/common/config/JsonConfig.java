@@ -55,6 +55,26 @@ public final class JsonConfig {
         }
     }
 
+    /**
+     * Schreibt eine fertige Konfiguration samt {@code *.example.json} daneben.
+     *
+     * <p>Fuer Werte, die jemand gerade eingegeben hat - Einrichtungs-Assistent des Masters,
+     * {@code join} des Wrappers. Eine vorhandene Datei wird <b>nicht</b> ueberschrieben:
+     * Darin koennen Zugangsdaten stehen, die es nirgends sonst gibt.
+     *
+     * @param template Vorgabe fuer die {@code *.example.json} - ohne Geheimnisse
+     * @throws java.nio.file.FileAlreadyExistsException wenn die Datei schon existiert
+     */
+    public static void write(Path path, Object value, Object template) throws IOException {
+        Path parent = path.getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+        Files.writeString(path, GSON.toJson(value), java.nio.file.StandardOpenOption.CREATE_NEW,
+                java.nio.file.StandardOpenOption.WRITE);
+        writeExample(path, template);
+    }
+
     private static void writeExample(Path path, Object template) throws IOException {
         String fileName = path.getFileName().toString();
         String base = fileName.endsWith(".json")

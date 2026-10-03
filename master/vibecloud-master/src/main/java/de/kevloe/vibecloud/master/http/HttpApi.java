@@ -113,11 +113,14 @@ public final class HttpApi implements AutoCloseable {
         this.wsRoutes = new WsRoutes(wsTickets, permissions, servers, console);
     }
 
+    /** Wo das Dashboard in der Master-Jar liegt ({@code bundledResources} im Build). */
+    private static final String BUNDLED_DASHBOARD = "/dashboard";
+
     /**
      * Startet den Server. Tut nichts, wenn die Schnittstelle abgeschaltet ist.
      *
-     * @param dashboard Verzeichnis mit dem gebauten Dashboard; fehlt es, laeuft nur die
-     *                  Schnittstelle
+     * @param dashboard Verzeichnis mit dem gebauten Dashboard; fehlt es, kommt es aus der
+     *                  Master-Jar, und ist es dort auch nicht, laeuft nur die Schnittstelle
      */
     public void start(MasterConfig.Http config, Path dashboard) {
         if (!config.enabled) {
@@ -177,6 +180,17 @@ public final class HttpApi implements AutoCloseable {
                 settings.spaRoot.addFile("/", directory + java.io.File.separator
                                               + "index.html", Location.EXTERNAL);
                 LOG.info("Dashboard wird aus {} ausgeliefert", directory);
+            } else if (HttpApi.class.getResource(BUNDLED_DASHBOARD + "/index.html") != null) {
+                // Aus der Master-Jar: Ein Root braucht dann nur sie. Ein Ordner daneben
+                // geht vor - so laesst sich das Dashboard ohne neuen Master tauschen, und
+                // updateTestEnv legt genau so einen an.
+                settings.staticFiles.add(staticFiles -> {
+                    staticFiles.directory = BUNDLED_DASHBOARD;
+                    staticFiles.location = Location.CLASSPATH;
+                });
+                settings.spaRoot.addFile("/", BUNDLED_DASHBOARD + "/index.html",
+                        Location.CLASSPATH);
+                LOG.info("Dashboard wird aus der Master-Jar ausgeliefert");
             } else {
                 LOG.info("Kein Dashboard in {} - nur die Schnittstelle laeuft. "
                          + "Bauen mit: cd dashboard && npm run build", dashboard);

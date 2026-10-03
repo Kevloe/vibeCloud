@@ -34,3 +34,11 @@ tasks.shadowJar {
 }
 
 tasks.build { dependsOn(tasks.shadowJar) }
+
+// Die fertige Plugin-Jar fuer die Master-Jar: Der Master packt sie beim Start nach
+// templates/global/.../plugins/ aus, damit ein Root nur CloudMaster.jar braucht.
+val pluginJarElements by configurations.creating {
+    isCanBeConsumed = true
+    isCanBeResolved = false
+}
+artifacts { add(pluginJarElements.name, tasks.shadowJar) }

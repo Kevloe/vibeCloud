@@ -135,13 +135,32 @@ public final class VibeCloudMaster implements AutoCloseable {
     public boolean start() throws Exception {
         LOG.info("vibeCloud Master startet (Protokoll-Version {})", VibeCloud.API_VERSION);
 
-        config = JsonConfig.loadOrCreate(
-                workingDirectory.resolve("config.json"), MasterConfig.class, new MasterConfig());
+        Path configPath = workingDirectory.resolve("config.json");
+        boolean createDefaultGroups = false;
+        if (java.nio.file.Files.notExists(configPath)) {
+            // Sitzt jemand an der Konsole, wird gefragt statt eine Vorlage geschrieben -
+            // ohne Konsole (Dienst) bleibt es beim Alten.
+            var setup = de.kevloe.vibecloud.master.install.SetupWizard.atConsole();
+            if (setup.isPresent()) {
+                if (setup.get().aborted()) {
+                    return false;
+                }
+                JsonConfig.write(configPath, setup.get().config(), new MasterConfig());
+                createDefaultGroups = setup.get().createDefaultGroups();
+            }
+        }
+        config = JsonConfig.loadOrCreate(configPath, MasterConfig.class, new MasterConfig());
         if (config == null) {
             // Erststart: Die Vorlage wurde geschrieben, jetzt soll der Betreiber draufschauen.
             return false;
         }
         configFile = new MasterConfigFile(workingDirectory.resolve("config.json"), config);
+
+        // Die Plattform-Plugins kommen aus der Master-Jar - ein Root braucht nur sie.
+        // Vor dem TemplateStore, der sie in jeden Server legt. Module kommen nicht mit;
+        // fuer sie gibt es nur den leeren Ordner.
+        de.kevloe.vibecloud.master.install.BundledFiles.fromClasspath(workingDirectory).install();
+        java.nio.file.Files.createDirectories(workingDirectory.resolve("modules"));
 
         database = new Database(config.database);
         if (!database.acquireMasterLock()) {
@@ -274,6 +293,11 @@ public final class VibeCloudMaster implements AutoCloseable {
         startHttp(servers, serverService, groups, nodeRepository, playerService,
                 rankRepository, console, bindings);
 
+        // Erst jetzt: Gruppen brauchen Datenbank, Versionskatalog und JarStore. Ueber die
+        // Konsole, damit es derselbe Weg ist wie ein getipptes 'cloud setup'.
+        if (createDefaultGroups && groups.findAll().isEmpty()) {
+            terminal.dispatch("cloud setup");
+        }
         printStartupHints(nodeRepository, groups, certificate);
         return true;
     }
